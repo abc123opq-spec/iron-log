@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0a0a0a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Iron Log" />
+<meta name="mobile-web-app-capable" content="yes" />
+<link rel="manifest" href="./manifest.json" />
+<link rel="apple-touch-icon" href="./icon-192.png" />
+<link rel="icon" type="image/png" href="./icon-192.png" />
+<title>IRON LOG</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: #0a0a0a; overscroll-behavior: none; }
+  body {
+    font-family: "JetBrains Mono", system-ui, sans-serif;
+    color: #eee;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  input { font-family: inherit; }
+  input::placeholder { color: #555; }
+  input:focus { outline: none; }
+  button { font-family: inherit; cursor: pointer; }
+  button:active { transform: scale(0.97); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+  @keyframes glow { 0%,100% { box-shadow: 0 0 20px #00ff8844 } 50% { box-shadow: 0 0 40px #00ff88 } }
+  @keyframes slideUp { from { transform: translateY(20px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+  @keyframes slideUpModal { from { transform: translateY(100%) } to { transform: translateY(0) } }
+  .scroll::-webkit-scrollbar { width: 4px; }
+  .scroll::-webkit-scrollbar-thumb { background: #00ff8844; border-radius: 2px; }
+  .scroll::-webkit-scrollbar-track { background: transparent; }
+  #root { min-height: 100vh; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo } = React;
+
+const NEON = '#00ff88';
+const NEON_DIM = '#00ff8844';
+const NEON_PINK = '#ff0080';
+const BG = '#0a0a0a';
+const CARD = '#141414';
+const BORDER = '#222';
+
+// === Inline icons (no lucide-react dependency) ===
+const Icon = ({ d, size = 18, fill = 'none', color = 'currentColor', stroke = 2 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
+    {Array.isArray(d) ? d.map((p, i) => <path key={i} d={p} />) : <path d={d} />}
+  </svg>
+);
+const IconDumbbell = (p) => <Icon {...p} d={['M14.4 14.4 9.6 9.6','M18.657 21.485a2 2 0 1 1-2.829-2.828l-1.767 1.768a2 2 0 1 1-2.829-2.829l6.364-6.364a2 2 0 1 1 2.829 2.829l-1.768 1.767a2 2 0 1 1 2.828 2.829z','M21.5 21.5l-1.4-1.4','M3.9 3.9 2.5 2.5','M6.404 12.768a2 2 0 1 1-2.829-2.829l1.768-1.767a2 2 0 1 1-2.828-2.829l2.828-2.828a2 2 0 1 1 2.829 2.828l1.767-1.768a2 2 0 1 1 2.829 2.829z']} />;
+const IconPlus = (p) => <Icon {...p} d={['M5 12h14','M12 5v14']} />;
+const IconX = (p) => <Icon {...p} d={['M18 6 6 18','M6 6l12 12']} />;
+const IconSearch = (p) => <Icon {...p} d={['M21 21l-4.3-4.3']} />;
+const IconStar = ({ filled, size = 16 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? NEON : 'none'} stroke={filled ? NEON : '#444'} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+  </svg>
+);
+const IconZap = (p) => <Icon {...p} d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />;
+const IconActivity = (p) => <Icon {...p} d="M22 12h-4l-3 9L9 3l-3 9H2" />;
+const IconTarget = (p) => <Icon {...p} d="M12 12m-10 0a10 10 0 1 0 20 0a10 10 0 1 0-20 0M12 12m-6 0a6 6 0 1 0 12 0a6 6 0 1 0-12 0M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0" />;
+const IconTrend = (p) => <Icon {...p} d={['M3 17l6-6 4 4 8-8','M14 7h7v7']} />;
+
+// === Search icon needs circle ===
+const SearchIcon = ({ size = 14, color = '#555' }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="8" />
+    <path d="M21 21l-4.3-4.3" />
+  </svg>
+);
+
+const PRESET_EXERCISES = [
+  { id: 'bench', name: 'ベンチプレス', group: '胸' },
+  { id: 'incline_bench', name: 'インクラインベンチプレス', group: '胸' },
+  { id: 'decline_bench', name: 'デクラインベンチプレス', group: '胸' },
+  { id: 'db_bench', name: 'ダンベルベンチプレス', group: '胸' },
+  { id: 'incline_db_press', name: 'インクラインダンベルプレス', group: '胸' },
+  { id: 'decline_db_press', name: 'デクラインダンベルプレス', group: '胸' },
+  { id: 'db_fly', name: 'ダンベルフライ', group: '胸' },
+  { id: 'incline_db_fly', name: 'インクラインダンベルフライ', group: '胸' },
+  { id: 'cable_crossover', name: 'ケーブルクロスオーバー', group: '胸' },
+  { id: 'pec_fly', name: 'ペックフライ', group: '胸' },
+  { id: 'chest_press_m', name: 'チェストプレス（マシン）', group: '胸' },
+  { id: 'pushup', name: 'プッシュアップ', group: '胸' },
+  { id: 'dips_chest', name: 'ディップス（胸）', group: '胸' },
+  { id: 'pullover', name: 'プルオーバー', group: '胸' },
+  { id: 'deadlift', name: 'デッドリフト', group: '背中' },
+  { id: 'romanian_dl', name: 'ルーマニアンデッドリフト', group: '背中' },
+  { id: 'sumo_dl', name: 'スモウデッドリフト', group: '背中' },
+  { id: 'bent_row', name: 'ベントオーバーロウ', group: '背中' },
+  { id: 'pendlay_row', name: 'ペンドレイロウ', group: '背中' },
+  { id: 't_bar_row', name: 'Tバーロウ', group: '背中' },
+  { id: 'one_hand_row', name: 'ワンハンドロウ', group: '背中' },
+  { id: 'seated_row', name: 'シーテッドロウ', group: '背中' },
+  { id: 'lat_pulldown', name: 'ラットプルダウン', group: '背中' },
+  { id: 'pullup', name: 'チンニング（懸垂）', group: '背中' },
+  { id: 'chinup', name: 'チンアップ（逆手）', group: '背中' },
+  { id: 'face_pull', name: 'フェイスプル', group: '背中' },
+  { id: 'back_ext', name: 'バックエクステンション', group: '背中' },
+  { id: 'good_morning', name: 'グッドモーニング', group: '背中' },
+  { id: 'shrug', name: 'シュラッグ', group: '背中' },
+  { id: 'ohp', name: 'ショルダープレス（バーベル）', group: '肩' },
+  { id: 'db_shoulder_press', name: 'ダンベルショルダープレス', group: '肩' },
+  { id: 'arnold_press', name: 'アーノルドプレス', group: '肩' },
+  { id: 'behind_neck_press', name: 'ビハインドネックプレス', group: '肩' },
+  { id: 'machine_shoulder', name: 'ショルダープレス（マシン）', group: '肩' },
+  { id: 'side_raise', name: 'サイドレイズ', group: '肩' },
+  { id: 'front_raise', name: 'フロントレイズ', group: '肩' },
+  { id: 'rear_delt_fly', name: 'リアデルトフライ', group: '肩' },
+  { id: 'upright_row', name: 'アップライトロウ', group: '肩' },
+  { id: 'cable_lateral', name: 'ケーブルサイドレイズ', group: '肩' },
+  { id: 'bb_curl', name: 'バーベルカール', group: '腕' },
+  { id: 'ez_curl', name: 'EZバーカール', group: '腕' },
+  { id: 'db_curl', name: 'ダンベルカール', group: '腕' },
+  { id: 'hammer_curl', name: 'ハンマーカール', group: '腕' },
+  { id: 'incline_curl', name: 'インクラインダンベルカール', group: '腕' },
+  { id: 'preacher_curl', name: 'プリーチャーカール', group: '腕' },
+  { id: 'concentration_curl', name: 'コンセントレーションカール', group: '腕' },
+  { id: 'cable_curl', name: 'ケーブルカール', group: '腕' },
+  { id: 'tricep_pushdown', name: 'トライセプスプレスダウン', group: '腕' },
+  { id: 'french_press', name: 'フレンチプレス', group: '腕' },
+  { id: 'skull_crusher', name: 'スカルクラッシャー', group: '腕' },
+  { id: 'close_grip_bench', name: 'ナローベンチプレス', group: '腕' },
+  { id: 'dips_tri', name: 'ディップス（三頭）', group: '腕' },
+  { id: 'overhead_ext', name: 'オーバーヘッドエクステンション', group: '腕' },
+  { id: 'kickback', name: 'キックバック', group: '腕' },
+  { id: 'wrist_curl', name: 'リストカール', group: '腕' },
+  { id: 'reverse_curl', name: 'リバースカール', group: '腕' },
+  { id: 'squat', name: 'スクワット', group: '脚' },
+  { id: 'front_squat', name: 'フロントスクワット', group: '脚' },
+  { id: 'hack_squat', name: 'ハックスクワット', group: '脚' },
+  { id: 'bulgarian_squat', name: 'ブルガリアンスクワット', group: '脚' },
+  { id: 'split_squat', name: 'スプリットスクワット', group: '脚' },
+  { id: 'sissy_squat', name: 'シシースクワット', group: '脚' },
+  { id: 'goblet_squat', name: 'ゴブレットスクワット', group: '脚' },
+  { id: 'leg_press', name: 'レッグプレス', group: '脚' },
+  { id: 'leg_ext', name: 'レッグエクステンション', group: '脚' },
+  { id: 'leg_curl', name: 'レッグカール', group: '脚' },
+  { id: 'lunge', name: 'ランジ', group: '脚' },
+  { id: 'walking_lunge', name: 'ウォーキングランジ', group: '脚' },
+  { id: 'step_up', name: 'ステップアップ', group: '脚' },
+  { id: 'calf_raise', name: 'カーフレイズ', group: '脚' },
+  { id: 'seated_calf', name: 'シーテッドカーフレイズ', group: '脚' },
+  { id: 'hip_thrust', name: 'ヒップスラスト', group: 'お尻' },
+  { id: 'glute_bridge', name: 'グルートブリッジ', group: 'お尻' },
+  { id: 'cable_kickback', name: 'ケーブルキックバック', group: 'お尻' },
+  { id: 'abductor', name: 'アブダクター', group: 'お尻' },
+  { id: 'crunch', name: 'クランチ', group: '体幹' },
+  { id: 'cable_crunch', name: 'ケーブルクランチ', group: '体幹' },
+  { id: 'leg_raise', name: 'レッグレイズ', group: '体幹' },
+  { id: 'hanging_leg_raise', name: 'ハンギングレッグレイズ', group: '体幹' },
+  { id: 'plank', name: 'プランク', group: '体幹' },
+  { id: 'ab_rollout', name: 'アブローラー', group: '体幹' },
+  { id: 'russian_twist', name: 'ロシアンツイスト', group: '体幹' },
+  { id: 'side_bend', name: 'サイドベンド', group: '体幹' },
+];
+
+const GROUPS = ['全部', '胸', '背中', '肩', '腕', '脚', 'お尻', '体幹'];
+
+// === LocalStorage adapter ===
+const storage = {
+  get: (key) => {
+    try {
+      const v = localStorage.getItem(key);
+      return v ? JSON.parse(v) : null;
+    } catch { return null; }
+  },
+  set: (key, value) => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  },
+};
+
+const epley = (w, r) => w * (1 + r / 30);
+
+// === Simple line chart (SVG) ===
+function MiniChart({ data }) {
+  if (data.length === 0) return null;
+  const W = 320, H = 160, P = 24;
+  const ys = data.map(d => d.oneRM);
+  const minY = Math.min(...ys) * 0.9;
+  const maxY = Math.max(...ys) * 1.05;
+  const range = maxY - minY || 1;
+  const stepX = data.length === 1 ? 0 : (W - P * 2) / (data.length - 1);
+  const points = data.map((d, i) => {
+    const x = P + i * stepX;
+    const y = H - P - ((d.oneRM - minY) / range) * (H - P * 2);
+    return { x, y, d };
+  });
+  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 180 }}>
+      {[0.25, 0.5, 0.75].map(t => (
+        <line key={t} x1={P} y1={P + (H - P * 2) * t} x2={W - P} y2={P + (H - P * 2) * t}
+          stroke={BORDER} strokeDasharray="3 3" strokeWidth="0.5" />
+      ))}
+      <path d={path} fill="none" stroke={NEON} strokeWidth="2" />
+      {points.map((p, i) => (
+        <circle key={i} cx={p.x} cy={p.y} r="3" fill={NEON} />
+      ))}
+      {/* y-axis labels */}
+      <text x={4} y={P + 4} fill="#666" fontSize="9">{maxY.toFixed(0)}</text>
+      <text x={4} y={H - P + 4} fill="#666" fontSize="9">{minY.toFixed(0)}</text>
+      {/* x-axis: first and last date */}
+      <text x={P} y={H - 6} fill="#666" fontSize="9">{data[0]?.date}</text>
+      {data.length > 1 && <text x={W - P} y={H - 6} fill="#666" fontSize="9" textAnchor="end">{data[data.length - 1]?.date}</text>}
+    </svg>
+  );
+}
+
+function App() {
+  const [view, setView] = useState('log');
+  const [sessions, setSessions] = useState(() => storage.get('sessions') || []);
+  const [favorites, setFavorites] = useState(() => storage.get('favorites') || []);
+  const [selectedExerciseId, setSelectedExerciseId] = useState(null);
+  const [weight, setWeight] = useState('');
+  const [reps, setReps] = useState('');
+  const [toast, setToast] = useState('');
+  const [showPicker, setShowPicker] = useState(false);
+  const [pickerGroup, setPickerGroup] = useState('全部');
+  const [pickerSearch, setPickerSearch] = useState('');
+
+  useEffect(() => { storage.set('sessions', sessions); }, [sessions]);
+  useEffect(() => { storage.set('favorites', favorites); }, [favorites]);
+
+  const toggleFavorite = (id) => {
+    setFavorites(favorites.includes(id) ? favorites.filter(x => x !== id) : [...favorites, id]);
+  };
+
+  const showToast = (msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 2000);
+  };
+
+  const logSet = () => {
+    if (!selectedExerciseId || !weight || !reps) { showToast('全部入れてね'); return; }
+    const w = parseFloat(weight);
+    const r = parseInt(reps);
+    if (isNaN(w) || isNaN(r) || w <= 0 || r <= 0) { showToast('数値が変だよ'); return; }
+    const newSession = {
+      id: 'ses_' + Date.now(),
+      date: new Date().toISOString(),
+      exerciseId: selectedExerciseId,
+      weight: w,
+      reps: r,
+    };
+    setSessions([newSession, ...sessions]);
+    setWeight(''); setReps('');
+    const ex = PRESET_EXERCISES.find((e) => e.id === selectedExerciseId);
+    const oneRM = (w * (1 + r / 30)).toFixed(1);
+    showToast(`${ex.name} ${w}kg×${r} → 1RM ${oneRM}kg`);
+  };
+
+  const deleteSession = (id) => setSessions(sessions.filter((s) => s.id !== id));
+
+  const usedExercises = useMemo(() => {
+    const ids = [...new Set(sessions.map(s => s.exerciseId))];
+    return ids.map(id => PRESET_EXERCISES.find(e => e.id === id)).filter(Boolean);
+  }, [sessions]);
+
+  const stats = useMemo(() => {
+    const byEx = {};
+    PRESET_EXERCISES.forEach((e) => {
+      const list = sessions.filter((s) => s.exerciseId === e.id);
+      const max1RM = list.reduce((m, s) => Math.max(m, epley(s.weight, s.reps)), 0);
+      byEx[e.id] = { count: list.length, max1RM };
+    });
+    return byEx;
+  }, [sessions]);
+
+  const totalVolume = useMemo(() => sessions.reduce((sum, s) => sum + s.weight * s.reps, 0), [sessions]);
+  const last7Days = useMemo(() => {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return sessions.filter((s) => new Date(s.date).getTime() > cutoff).length;
+  }, [sessions]);
+
+  const pickerList = useMemo(() => {
+    let list = PRESET_EXERCISES;
+    if (pickerGroup !== '全部') list = list.filter(e => e.group === pickerGroup);
+    if (pickerSearch.trim()) {
+      const q = pickerSearch.trim().toLowerCase();
+      list = list.filter(e => e.name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [pickerGroup, pickerSearch]);
+
+  return (
+    <div style={styles.app}>
+      <div style={styles.header}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <IconDumbbell size={24} color={NEON} />
+          <div>
+            <div style={styles.brand}>IRON LOG</div>
+            <div style={styles.subBrand}>workout tracker</div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <Stat label="TOTAL VOL" value={`${(totalVolume / 1000).toFixed(1)}t`} />
+          <Stat label="7D" value={last7Days} />
+        </div>
+      </div>
+
+      <div style={styles.content} className="scroll">
+        {view === 'log' && (
+          <LogView
+            sessions={sessions} favorites={favorites}
+            selectedExerciseId={selectedExerciseId} setSelectedExerciseId={setSelectedExerciseId}
+            setShowPicker={setShowPicker}
+            weight={weight} setWeight={setWeight}
+            reps={reps} setReps={setReps}
+            logSet={logSet} deleteSession={deleteSession}
+          />
+        )}
+        {view === 'history' && <HistoryView sessions={sessions} usedExercises={usedExercises} />}
+        {view === 'browse' && <BrowseView stats={stats} favorites={favorites} toggleFavorite={toggleFavorite} />}
+        {view === 'calc' && <CalcView />}
+      </div>
+
+      <div style={styles.tabBar}>
+        <Tab icon={<IconZap size={18} />} label="記録" active={view === 'log'} onClick={() => setView('log')} />
+        <Tab icon={<IconActivity size={18} />} label="履歴" active={view === 'history'} onClick={() => setView('history')} />
+        <Tab icon={<IconTarget size={18} />} label="種目" active={view === 'browse'} onClick={() => setView('browse')} />
+        <Tab icon={<IconTrend size={18} />} label="1RM" active={view === 'calc'} onClick={() => setView('calc')} />
+      </div>
+
+      {showPicker && (
+        <ExercisePicker
+          list={pickerList}
+          group={pickerGroup} setGroup={setPickerGroup}
+          search={pickerSearch} setSearch={setPickerSearch}
+          favorites={favorites} toggleFavorite={toggleFavorite}
+          onPick={(id) => { setSelectedExerciseId(id); setShowPicker(false); setPickerSearch(''); }}
+          onClose={() => { setShowPicker(false); setPickerSearch(''); }}
+        />
+      )}
+
+      {toast && <div style={styles.toast}>{toast}</div>}
+    </div>
+  );
+}
+
+function LogView({ sessions, favorites, selectedExerciseId, setSelectedExerciseId, setShowPicker, weight, setWeight, reps, setReps, logSet, deleteSession }) {
+  const today = new Date().toDateString();
+  const todaySessions = sessions.filter((s) => new Date(s.date).toDateString() === today);
+  const selectedExercise = PRESET_EXERCISES.find(e => e.id === selectedExerciseId);
+
+  const recentIds = [...new Set(sessions.slice(0, 30).map(s => s.exerciseId))].slice(0, 5);
+  const quickIds = [...new Set([...favorites, ...recentIds])].slice(0, 6);
+  const quickExercises = quickIds.map(id => PRESET_EXERCISES.find(e => e.id === id)).filter(Boolean);
+
+  return (
+    <div style={{ animation: 'slideUp 0.3s ease' }}>
+      <SectionLabel text="TODAY · " accent={new Date().toLocaleDateString('ja-JP', { month: 'short', day: 'numeric', weekday: 'short' })} />
+
+      {quickExercises.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 9, color: '#555', letterSpacing: 1.5, marginBottom: 6 }}>QUICK SELECT</div>
+          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }} className="scroll">
+            {quickExercises.map((ex) => (
+              <button key={ex.id} onClick={() => setSelectedExerciseId(ex.id)}
+                style={{ ...styles.chip, ...(selectedExerciseId === ex.id ? styles.chipActive : {}), fontSize: 12, padding: '6px 12px' }}>
+                {favorites.includes(ex.id) && '★ '}{ex.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={styles.card}>
+        <label style={styles.inputLabel}>EXERCISE</label>
+        <button onClick={() => setShowPicker(true)} style={styles.selectorBtn}>
+          <span style={{ color: selectedExercise ? '#fff' : '#555' }}>
+            {selectedExercise ? selectedExercise.name : '種目を選ぶ →'}
+          </span>
+          {selectedExercise && <span style={styles.groupBadge}>{selectedExercise.group}</span>}
+        </button>
+
+        <div style={{ display: 'flex', gap: 12, marginTop: 14 }}>
+          <div style={{ flex: 1 }}>
+            <label style={styles.inputLabel}>WEIGHT (kg)</label>
+            <input type="number" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="80" style={styles.input} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={styles.inputLabel}>REPS</label>
+            <input type="number" inputMode="numeric" value={reps} onChange={(e) => setReps(e.target.value)} placeholder="5" style={styles.input} />
+          </div>
+        </div>
+
+        {weight && reps && !isNaN(parseFloat(weight)) && !isNaN(parseInt(reps)) && (
+          <div style={styles.predictBox}>
+            推定1RM <span style={{ color: NEON, fontWeight: 700 }}>{(parseFloat(weight) * (1 + parseInt(reps) / 30)).toFixed(1)}kg</span>
+          </div>
+        )}
+        <button onClick={logSet} style={styles.primaryBtn}>
+          <IconPlus size={18} color="#000" /> セットを記録
+        </button>
+      </div>
+
+      <SectionLabel text="TODAY'S SETS" accent={`${todaySessions.length}`} />
+      {todaySessions.length === 0 ? (
+        <div style={styles.emptySmall}>まだセットなし</div>
+      ) : (
+        todaySessions.map((s) => {
+          const ex = PRESET_EXERCISES.find((e) => e.id === s.exerciseId);
+          const oneRM = (s.weight * (1 + s.reps / 30)).toFixed(1);
+          return (
+            <div key={s.id} style={styles.sessionRow}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#eee' }}>{ex?.name || '?'}</div>
+                <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                  {s.weight}kg × {s.reps}回 · 1RM {oneRM}kg
+                </div>
+              </div>
+              <button onClick={() => deleteSession(s.id)} style={styles.iconBtn}>
+                <IconX size={16} />
+              </button>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function ExercisePicker({ list, group, setGroup, search, setSearch, favorites, toggleFavorite, onPick, onClose }) {
+  const grouped = useMemo(() => {
+    const g = {};
+    list.forEach(ex => {
+      if (!g[ex.group]) g[ex.group] = [];
+      g[ex.group].push(ex);
+    });
+    return g;
+  }, [list]);
+
+  return (
+    <div style={styles.modalBackdrop} onClick={onClose}>
+      <div style={styles.modal} onClick={e => e.stopPropagation()}>
+        <div style={styles.modalHeader}>
+          <div style={{ fontSize: 13, color: NEON, letterSpacing: 2 }}>SELECT EXERCISE</div>
+          <button onClick={onClose} style={styles.iconBtn}><IconX size={20} /></button>
+        </div>
+
+        <div style={{ padding: '0 16px' }}>
+          <div style={{ position: 'relative', marginBottom: 10 }}>
+            <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }}><SearchIcon /></span>
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="種目を検索..." autoFocus
+              style={{ ...styles.input, paddingLeft: 34, fontSize: 14, fontFamily: 'inherit', letterSpacing: 0 }} />
+          </div>
+
+          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 8 }} className="scroll">
+            {GROUPS.map(g => (
+              <button key={g} onClick={() => setGroup(g)}
+                style={{ ...styles.chip, ...(group === g ? styles.chipActive : {}), fontSize: 12, padding: '6px 14px' }}>
+                {g}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={styles.modalList} className="scroll">
+          {Object.keys(grouped).length === 0 ? (
+            <div style={styles.emptySmall}>該当する種目なし</div>
+          ) : (
+            Object.entries(grouped).map(([gName, items]) => (
+              <div key={gName} style={{ marginBottom: 14 }}>
+                <div style={styles.groupHeader}>{gName} · {items.length}</div>
+                {items.map(ex => (
+                  <div key={ex.id} style={styles.pickerRow}>
+                    <button onClick={() => toggleFavorite(ex.id)} style={styles.starBtn}>
+                      <IconStar filled={favorites.includes(ex.id)} size={16} />
+                    </button>
+                    <button onClick={() => onPick(ex.id)} style={styles.pickerNameBtn}>
+                      {ex.name}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryView({ sessions, usedExercises }) {
+  const [picked, setPicked] = useState(usedExercises[0]?.id || null);
+
+  useEffect(() => {
+    if (picked && !usedExercises.find(e => e.id === picked)) setPicked(usedExercises[0]?.id || null);
+    else if (!picked && usedExercises.length > 0) setPicked(usedExercises[0].id);
+  }, [usedExercises, picked]);
+
+  const chartData = useMemo(() => {
+    if (!picked) return [];
+    return sessions
+      .filter((s) => s.exerciseId === picked)
+      .slice().reverse()
+      .map((s) => ({
+        date: new Date(s.date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }),
+        oneRM: parseFloat((s.weight * (1 + s.reps / 30)).toFixed(1)),
+      }));
+  }, [picked, sessions]);
+
+  if (usedExercises.length === 0) {
+    return (
+      <div style={{ animation: 'slideUp 0.3s ease' }}>
+        <SectionLabel text="PROGRESS" />
+        <div style={styles.empty}>まずは記録から始めよう</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ animation: 'slideUp 0.3s ease' }}>
+      <SectionLabel text="PROGRESS" />
+      <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }} className="scroll">
+        {usedExercises.map((ex) => (
+          <button key={ex.id} onClick={() => setPicked(ex.id)}
+            style={{ ...styles.chip, ...(picked === ex.id ? styles.chipActive : {}) }}>
+            {ex.name}
+          </button>
+        ))}
+      </div>
+
+      {chartData.length > 0 && (
+        <React.Fragment>
+          <div style={{ ...styles.card, padding: 16 }}>
+            <div style={{ fontSize: 11, color: '#888', letterSpacing: 1.5, marginBottom: 12 }}>推定1RMの推移</div>
+            <MiniChart data={chartData} />
+          </div>
+
+          <SectionLabel text="ALL SETS" accent={`${chartData.length}`} />
+          {sessions.filter((s) => s.exerciseId === picked).map((s) => {
+            const date = new Date(s.date);
+            const oneRM = (s.weight * (1 + s.reps / 30)).toFixed(1);
+            return (
+              <div key={s.id} style={styles.sessionRow}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, color: '#eee' }}>{s.weight}kg × {s.reps}</div>
+                  <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                    {date.toLocaleDateString('ja-JP')} · 1RM {oneRM}kg
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function BrowseView({ stats, favorites, toggleFavorite }) {
+  const [group, setGroup] = useState('全部');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+
+  const list = useMemo(() => {
+    let l = PRESET_EXERCISES;
+    if (filter === 'fav') l = l.filter(e => favorites.includes(e.id));
+    if (filter === 'used') l = l.filter(e => (stats[e.id]?.count || 0) > 0);
+    if (group !== '全部') l = l.filter(e => e.group === group);
+    if (search.trim()) {
+      const q = search.trim().toLowerCase();
+      l = l.filter(e => e.name.toLowerCase().includes(q));
+    }
+    return l;
+  }, [group, search, filter, favorites, stats]);
+
+  const grouped = useMemo(() => {
+    const g = {};
+    list.forEach(ex => {
+      if (!g[ex.group]) g[ex.group] = [];
+      g[ex.group].push(ex);
+    });
+    return g;
+  }, [list]);
+
+  return (
+    <div style={{ animation: 'slideUp 0.3s ease' }}>
+      <SectionLabel text="EXERCISES" accent={`${PRESET_EXERCISES.length}種目`} />
+
+      <div style={{ position: 'relative', marginBottom: 10 }}>
+        <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }}><SearchIcon /></span>
+        <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="検索..."
+          style={{ ...styles.input, paddingLeft: 34, fontSize: 14, fontFamily: 'inherit', letterSpacing: 0 }} />
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+        {[{k:'all', l:'全種目'}, {k:'fav', l:'★お気に入り'}, {k:'used', l:'記録あり'}].map(f => (
+          <button key={f.k} onClick={() => setFilter(f.k)}
+            style={{ ...styles.chip, ...(filter === f.k ? styles.chipActive : {}), fontSize: 11, padding: '5px 12px' }}>
+            {f.l}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 8, marginBottom: 12 }} className="scroll">
+        {GROUPS.map(g => (
+          <button key={g} onClick={() => setGroup(g)}
+            style={{ ...styles.chip, ...(group === g ? styles.chipActive : {}), fontSize: 12, padding: '6px 14px' }}>
+            {g}
+          </button>
+        ))}
+      </div>
+
+      {Object.keys(grouped).length === 0 ? (
+        <div style={styles.emptySmall}>該当する種目なし</div>
+      ) : (
+        Object.entries(grouped).map(([gName, items]) => (
+          <div key={gName} style={{ marginBottom: 14 }}>
+            <div style={styles.groupHeader}>{gName} · {items.length}</div>
+            {items.map(ex => {
+              const s = stats[ex.id] || { count: 0, max1RM: 0 };
+              return (
+                <div key={ex.id} style={styles.exerciseRow}>
+                  <button onClick={() => toggleFavorite(ex.id)} style={styles.starBtn}>
+                    <IconStar filled={favorites.includes(ex.id)} size={16} />
+                  </button>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, color: '#eee' }}>{ex.name}</div>
+                    {s.count > 0 && (
+                      <div style={{ fontSize: 10, color: '#888', marginTop: 3 }}>
+                        {s.count}セット · 最大1RM <span style={{ color: NEON }}>{s.max1RM.toFixed(1)}kg</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+function CalcView() {
+  const [w, setW] = useState('');
+  const [r, setR] = useState('');
+  const wn = parseFloat(w);
+  const rn = parseInt(r);
+  const valid = !isNaN(wn) && !isNaN(rn) && wn > 0 && rn > 0;
+  const ep = valid ? wn * (1 + rn / 30) : 0;
+  const br = valid && rn < 37 ? wn / (1.0278 - 0.0278 * rn) : 0;
+  const avg = valid ? (ep + br) / 2 : 0;
+  const percentages = [95, 90, 85, 80, 75, 70, 65, 60];
+
+  return (
+    <div style={{ animation: 'slideUp 0.3s ease' }}>
+      <SectionLabel text="1RM CALCULATOR" />
+      <div style={styles.card}>
+        <div style={{ display: 'flex', gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label style={styles.inputLabel}>WEIGHT (kg)</label>
+            <input type="number" inputMode="decimal" value={w} onChange={(e) => setW(e.target.value)} placeholder="80" style={styles.input} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={styles.inputLabel}>REPS</label>
+            <input type="number" inputMode="numeric" value={r} onChange={(e) => setR(e.target.value)} placeholder="5" style={styles.input} />
+          </div>
+        </div>
+      </div>
+
+      {valid && (
+        <React.Fragment>
+          <div style={{ ...styles.card, textAlign: 'center', padding: 24, animation: 'glow 2s infinite' }}>
+            <div style={{ fontSize: 11, color: '#888', letterSpacing: 2, marginBottom: 8 }}>推定 1RM</div>
+            <div style={{ fontSize: 48, fontWeight: 700, color: NEON, fontFamily: 'Bebas Neue, sans-serif', letterSpacing: 2 }}>
+              {avg.toFixed(1)}<span style={{ fontSize: 20, color: '#888', marginLeft: 4 }}>kg</span>
+            </div>
+            <div style={{ fontSize: 11, color: '#666', marginTop: 8 }}>
+              Epley: {ep.toFixed(1)} · Brzycki: {br.toFixed(1)}
+            </div>
+          </div>
+
+          <SectionLabel text="TRAINING %" />
+          <div style={styles.percentGrid}>
+            {percentages.map((p) => (
+              <div key={p} style={styles.percentItem}>
+                <div style={{ fontSize: 10, color: '#888' }}>{p}%</div>
+                <div style={{ fontSize: 18, fontWeight: 600, color: '#eee', fontFamily: 'Bebas Neue, sans-serif' }}>
+                  {(avg * p / 100).toFixed(1)}<span style={{ fontSize: 10, color: '#666' }}>kg</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={styles.note}>※ Epley式・Brzycki式の平均。3〜6レップでの記録が最も精度高い</div>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+function Tab({ icon, label, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{ ...styles.tab, ...(active ? styles.tabActive : {}) }}>
+      {icon}
+      <span style={{ fontSize: 10, marginTop: 4, letterSpacing: 1 }}>{label}</span>
+    </button>
+  );
+}
+
+function Stat({ label, value }) {
+  return (
+    <div style={{ textAlign: 'right' }}>
+      <div style={{ fontSize: 9, color: '#666', letterSpacing: 1.5 }}>{label}</div>
+      <div style={{ fontSize: 16, color: NEON, fontFamily: 'Bebas Neue, sans-serif', letterSpacing: 1 }}>{value}</div>
+    </div>
+  );
+}
+
+function SectionLabel({ text, accent }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, marginBottom: 12 }}>
+      <div style={{ width: 3, height: 14, background: NEON, boxShadow: `0 0 8px ${NEON}` }} />
+      <div style={{ fontSize: 11, color: '#888', letterSpacing: 2 }}>
+        {text}{accent && <span style={{ color: NEON, marginLeft: 6 }}>{accent}</span>}
+      </div>
+    </div>
+  );
+}
+
+const styles = {
+  app: {
+    background: BG, color: '#eee', minHeight: '100vh', maxWidth: 480,
+    margin: '0 auto', display: 'flex', flexDirection: 'column', position: 'relative',
+    backgroundImage: `radial-gradient(circle at 20% 0%, ${NEON_DIM}11 0%, transparent 50%), radial-gradient(circle at 80% 100%, ${NEON_PINK}11 0%, transparent 50%)`,
+  },
+  header: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '16px 20px 12px', borderBottom: `1px solid ${BORDER}`,
+    position: 'sticky', top: 0, background: BG, zIndex: 10,
+  },
+  brand: { fontFamily: 'Bebas Neue, sans-serif', fontSize: 22, letterSpacing: 4, color: '#fff', lineHeight: 1 },
+  subBrand: { fontSize: 9, color: '#666', letterSpacing: 2, marginTop: 2 },
+  content: { flex: 1, overflowY: 'auto', padding: '16px 20px 100px' },
+  tabBar: {
+    position: 'fixed', bottom: 0, left: 0, right: 0, maxWidth: 480, margin: '0 auto',
+    display: 'flex', background: '#080808', borderTop: `1px solid ${BORDER}`,
+    padding: '8px 0 calc(20px + env(safe-area-inset-bottom))',
+  },
+  tab: {
+    flex: 1, background: 'transparent', border: 'none', color: '#555',
+    padding: '8px 0', display: 'flex', flexDirection: 'column', alignItems: 'center',
+    transition: 'all 0.2s',
+  },
+  tabActive: { color: NEON, textShadow: `0 0 10px ${NEON}` },
+  card: { background: CARD, border: `1px solid ${BORDER}`, borderRadius: 8, padding: 16, marginBottom: 16 },
+  input: {
+    width: '100%', background: '#0a0a0a', border: `1px solid ${BORDER}`, color: '#fff',
+    padding: '12px 14px', borderRadius: 6, fontSize: 18, fontFamily: 'Bebas Neue, sans-serif',
+    letterSpacing: 1, transition: 'all 0.2s',
+  },
+  inputLabel: { display: 'block', fontSize: 10, color: '#888', letterSpacing: 1.5, marginBottom: 6 },
+  selectorBtn: {
+    width: '100%', background: '#0a0a0a', border: `1px solid ${BORDER}`,
+    padding: '14px', borderRadius: 6, fontSize: 14, display: 'flex',
+    justifyContent: 'space-between', alignItems: 'center', transition: 'all 0.2s', textAlign: 'left',
+  },
+  groupBadge: {
+    fontSize: 10, color: NEON, padding: '2px 8px', border: `1px solid ${NEON_DIM}`,
+    borderRadius: 10, letterSpacing: 1,
+  },
+  predictBox: {
+    margin: '12px 0', padding: '8px 12px', background: '#0a0a0a',
+    border: `1px solid ${NEON_DIM}`, borderRadius: 6, fontSize: 12, color: '#888',
+  },
+  primaryBtn: {
+    width: '100%', background: NEON, color: '#000', border: 'none',
+    padding: '14px', borderRadius: 6, fontWeight: 700, fontSize: 14, letterSpacing: 1.5,
+    marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    gap: 6, boxShadow: `0 0 20px ${NEON_DIM}`, transition: 'all 0.2s',
+  },
+  chip: {
+    background: '#0a0a0a', color: '#888', border: `1px solid ${BORDER}`,
+    padding: '8px 16px', borderRadius: 20, fontSize: 13, whiteSpace: 'nowrap', transition: 'all 0.2s',
+  },
+  chipActive: { background: NEON, color: '#000', borderColor: NEON, fontWeight: 600, boxShadow: `0 0 15px ${NEON_DIM}` },
+  sessionRow: {
+    display: 'flex', alignItems: 'center', padding: '12px 14px',
+    background: CARD, border: `1px solid ${BORDER}`, borderRadius: 6, marginBottom: 8,
+  },
+  exerciseRow: {
+    display: 'flex', alignItems: 'center', padding: '10px 12px',
+    background: CARD, border: `1px solid ${BORDER}`, borderRadius: 6, marginBottom: 6, gap: 8,
+  },
+  iconBtn: {
+    background: 'transparent', border: 'none', color: '#555',
+    padding: 8, display: 'flex', alignItems: 'center',
+  },
+  starBtn: {
+    background: 'transparent', border: 'none', padding: 4,
+    display: 'flex', alignItems: 'center',
+  },
+  empty: { textAlign: 'center', padding: 40, color: '#666', fontSize: 13 },
+  emptySmall: { textAlign: 'center', padding: 20, color: '#555', fontSize: 12, fontStyle: 'italic' },
+  percentGrid: { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12 },
+  percentItem: { background: CARD, border: `1px solid ${BORDER}`, borderRadius: 6, padding: '10px 8px', textAlign: 'center' },
+  note: { fontSize: 10, color: '#666', textAlign: 'center', padding: 12, lineHeight: 1.6 },
+  toast: {
+    position: 'fixed', bottom: 100, left: '50%', transform: 'translateX(-50%)',
+    background: '#000', border: `1px solid ${NEON}`, color: NEON,
+    padding: '10px 18px', borderRadius: 30, fontSize: 12,
+    boxShadow: `0 0 30px ${NEON_DIM}`, zIndex: 100, animation: 'slideUp 0.3s ease',
+  },
+  modalBackdrop: {
+    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+    background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(4px)',
+    zIndex: 200, display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+  },
+  modal: {
+    width: '100%', maxWidth: 480, height: '85vh',
+    background: '#0a0a0a', borderTop: `1px solid ${NEON_DIM}`,
+    borderRadius: '16px 16px 0 0', display: 'flex', flexDirection: 'column',
+    animation: 'slideUpModal 0.3s ease',
+  },
+  modalHeader: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '16px 16px 12px',
+  },
+  modalList: { flex: 1, overflowY: 'auto', padding: '0 16px 20px' },
+  groupHeader: {
+    fontSize: 10, color: NEON, letterSpacing: 2, padding: '8px 4px',
+    borderBottom: `1px solid ${NEON_DIM}`, marginBottom: 6,
+  },
+  pickerRow: {
+    display: 'flex', alignItems: 'center', padding: '4px 4px',
+    borderBottom: `1px solid #181818`,
+  },
+  pickerNameBtn: {
+    flex: 1, background: 'transparent', border: 'none', color: '#eee',
+    padding: '12px 8px', fontSize: 14, textAlign: 'left',
+  },
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+
+// === Service Worker registration ===
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+</script>
+</body>
+</html>
