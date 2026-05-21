@@ -228,6 +228,59 @@ const LIFT_RANK = {
 const isCompound = (id) => COMPOUND_IDS.has(id);
 const liftRank = (id) => LIFT_RANK[id] || 0;
 
+// === 種目のターゲット部分(region) ===
+// 同じ部位内でも異なる筋頭・部分を狙うものを区別
+// 例: 肩は前部/中部/後部に分ける(エビデンス: 三頭は別々に育てないとアンバランス・ACE研究)
+const EXERCISE_REGION = {
+  // 胸: 上部(upper) / 中部(mid) / 下部(lower)
+  bench: 'mid', db_bench: 'mid', chest_press_m: 'mid', pushup: 'mid', pec_fly: 'mid',
+  incline_bench: 'upper', incline_db_press: 'upper', incline_db_fly: 'upper',
+  decline_bench: 'lower', decline_db_press: 'lower', dips_chest: 'lower',
+  db_fly: 'mid', cable_crossover: 'mid', pullover: 'upper',
+  // 背中: 広がり(width=ラット) / 厚み(thickness=ロウ) / 上部(upper=僧帽・後背)
+  lat_pulldown: 'width', pullup: 'width', chinup: 'width',
+  bent_row: 'thickness', pendlay_row: 'thickness', t_bar_row: 'thickness',
+  one_hand_row: 'thickness', seated_row: 'thickness',
+  deadlift: 'thickness', romanian_dl: 'thickness', sumo_dl: 'thickness',
+  shrug: 'upper', face_pull: 'upper', back_ext: 'lower_back', good_morning: 'lower_back',
+  // 肩: 前部(anterior) / 中部(medial) / 後部(posterior)
+  ohp: 'anterior', db_shoulder_press: 'anterior', arnold_press: 'anterior',
+  behind_neck_press: 'medial', machine_shoulder: 'anterior',
+  side_raise: 'medial', cable_lateral: 'medial', upright_row: 'medial',
+  front_raise: 'anterior',
+  rear_delt_fly: 'posterior',
+  // 腕: 二頭(biceps) / 三頭(triceps) / 前腕(forearm)
+  bb_curl: 'biceps', ez_curl: 'biceps', db_curl: 'biceps', incline_curl: 'biceps',
+  preacher_curl: 'biceps', concentration_curl: 'biceps', cable_curl: 'biceps',
+  hammer_curl: 'forearm', reverse_curl: 'forearm', wrist_curl: 'forearm',
+  tricep_pushdown: 'triceps', french_press: 'triceps', skull_crusher: 'triceps',
+  close_grip_bench: 'triceps', dips_tri: 'triceps', overhead_ext: 'triceps', kickback: 'triceps',
+  // 脚: 大腿四頭(quad) / ハム(ham) / カーフ(calf)
+  squat: 'quad', front_squat: 'quad', hack_squat: 'quad', leg_press: 'quad',
+  leg_ext: 'quad', sissy_squat: 'quad', goblet_squat: 'quad',
+  bulgarian_squat: 'quad', split_squat: 'quad', lunge: 'quad', walking_lunge: 'quad', step_up: 'quad',
+  leg_curl: 'ham',
+  calf_raise: 'calf', seated_calf: 'calf',
+  // お尻
+  hip_thrust: 'glute', glute_bridge: 'glute', cable_kickback: 'glute', abductor: 'glute',
+  // 体幹
+  crunch: 'abs', cable_crunch: 'abs', leg_raise: 'abs', hanging_leg_raise: 'abs', ab_rollout: 'abs',
+  plank: 'abs', russian_twist: 'oblique', side_bend: 'oblique',
+};
+
+// 部位ごとに、必ずカバーすべき region のリスト
+const ESSENTIAL_REGIONS = {
+  '胸': ['upper', 'mid', 'lower'],
+  '背中': ['width', 'thickness'],
+  '肩': ['anterior', 'medial', 'posterior'], // ←ここが重要、3つ全部カバー
+  '腕': ['biceps', 'triceps'],
+  '脚': ['quad', 'ham'],
+  'お尻': ['glute'],
+  '体幹': ['abs'],
+};
+
+const exerciseRegion = (id) => EXERCISE_REGION[id] || 'other';
+
 // === LocalStorage adapter ===
 const storage = {
   get: (key) => {
@@ -937,7 +990,8 @@ function BrowseView({ stats, favorites, toggleFavorite }) {
 function PlanView({ sessions, exerciseModes, setSelectedExerciseId, setWeight, setReps, setView, showToast }) {
   const [selectedGroups, setSelectedGroups] = useState([]);
   const [planMode, setPlanMode] = useState('bulk'); // 'bulk' | 'cut'
-  const [plan, setPlan] = useState(null); // 生成されたメニュー
+  const [volume, setVolume] = useState('standard'); // 'light' | 'standard' | 'heavy'
+  const [plan, setPlan] = useState(null);
   const PARTS = ['胸', '背中', '肩', '腕', '脚', 'お尻', '体幹'];
 
   const toggleGroup = (g) => {
@@ -950,15 +1004,12 @@ function PlanView({ sessions, exerciseModes, setSelectedExerciseId, setWeight, s
   const getLastFirstSetWeight = (exerciseId) => {
     const past = sessions.filter(s => s.exerciseId === exerciseId);
     if (past.length === 0) return null;
-    // sessionsは新しい順なので、最新のセッション日付を見つける
     const latestDate = new Date(past[0].date).toDateString();
     const sameDay = past.filter(s => new Date(s.date).toDateString() === latestDate);
-    // 同じ日のうち最も古いものが1セット目
     const firstSet = sameDay[sameDay.length - 1];
     return { weight: firstSet.weight, reps: firstSet.reps };
   };
 
-  // 重量推奨を計算
   const recommendWeight = (exerciseId, mode) => {
     const last = getLastFirstSetWeight(exerciseId);
     const targetReps = mode === 'bulk' ? 8 : 15;
@@ -972,71 +1023,153 @@ function PlanView({ sessions, exerciseModes, setSelectedExerciseId, setWeight, s
     return { weight: last.weight, reps: targetReps, isNew: false, note: '同重量で継続' };
   };
 
+  // 部位ごとの目標種目数を決定
+  const getPerGroupCount = (groupCount, vol) => {
+    // [LIGHT, STANDARD, HEAVY] × 部位数で表
+    const table = {
+      light:    { 1: 3, 2: 4, 3: 5, 4: 6, 5: 6, 6: 6, 7: 7 },
+      standard: { 1: 5, 2: 6, 3: 8, 4: 8, 5: 9, 6: 9, 7: 10 },
+      heavy:    { 1: 6, 2: 8, 3: 10, 4: 11, 5: 12, 6: 12, 7: 13 },
+    };
+    return table[vol][groupCount] || (groupCount * 2);
+  };
+
   const buildPlan = () => {
     if (selectedGroups.length === 0) {
       showToast('部位を選んでね');
       return;
     }
-    // 選択部位の全種目を取得
-    let candidates = PRESET_EXERCISES.filter(e => selectedGroups.includes(e.group));
-    // 種目ごとのモード(個別設定>選択部位の今回モード)
-    const items = candidates.map(ex => ({
-      ...ex,
-      mode: exerciseModes[ex.id] || planMode,
-      rank: liftRank(ex.id),
-      compound: isCompound(ex.id),
-    }));
+    const totalTarget = getPerGroupCount(selectedGroups.length, volume);
 
-    // バルク優先(コンパウンド優先・重い順) / カット優先(軽め・アイソレーション → コンパウンドで仕上げ)
+    // 部位ごとに種目を構築
+    const picksByGroup = {};
+
+    for (const group of selectedGroups) {
+      const groupExercises = PRESET_EXERCISES.filter(e => e.group === group)
+        .map(ex => ({
+          ...ex,
+          region: exerciseRegion(ex.id),
+          rank: liftRank(ex.id),
+          compound: isCompound(ex.id),
+        }));
+
+      const essentialRegions = ESSENTIAL_REGIONS[group] || [];
+      const picked = [];
+      const coveredRegions = new Set();
+
+      // STEP 1: 必須regionそれぞれから「最も適切な種目」を1つ選ぶ
+      // バルクならコンパウンド優先、その中で重い順
+      // カットならアイソレーション優先、軽め
+      for (const region of essentialRegions) {
+        const candidates = groupExercises.filter(e =>
+          e.region === region && !picked.find(p => p.id === e.id)
+        );
+        if (candidates.length === 0) continue;
+
+        let chosen;
+        if (planMode === 'bulk') {
+          // バルク: コンパウンド優先・重い順
+          chosen = candidates.slice().sort((a, b) => {
+            if (a.compound !== b.compound) return a.compound ? -1 : 1;
+            return b.rank - a.rank;
+          })[0];
+        } else {
+          // カット: アイソレーション(軽め)優先
+          chosen = candidates.slice().sort((a, b) => {
+            if (a.compound !== b.compound) return a.compound ? 1 : -1;
+            return a.rank - b.rank;
+          })[0];
+        }
+        picked.push(chosen);
+        coveredRegions.add(region);
+      }
+
+      picksByGroup[group] = { picked, essentialRegions, all: groupExercises };
+    }
+
+    // 全部位の essential region カバー後の残り枠を計算
+    const usedCount = Object.values(picksByGroup).reduce((sum, x) => sum + x.picked.length, 0);
+    const remaining = Math.max(0, totalTarget - usedCount);
+
+    // STEP 2: 残り枠を部位に均等に追加(重要region優先で2種目目を投入)
+    // 各region毎の上限を2種目とし、まずは未カバーregionと薄い regionから埋める
+    if (remaining > 0) {
+      const REGION_CAP = 2; // 同じregionから最大2種目まで
+      const queue = [];
+      for (const group of selectedGroups) {
+        const data = picksByGroup[group];
+        const additional = data.all
+          .filter(e => !data.picked.find(p => p.id === e.id));
+        additional.forEach(ex => {
+          queue.push({ group, exercise: ex });
+        });
+      }
+      // 「未充足regionの優先度」を毎ループ評価する貪欲法
+      let added = 0;
+      while (added < remaining && queue.length > 0) {
+        // 残り候補に対し、現在のpickedを見て最適な1つを選ぶ
+        let bestIdx = -1;
+        let bestScore = null;
+        for (let i = 0; i < queue.length; i++) {
+          const { group, exercise: ex } = queue[i];
+          const data = picksByGroup[group];
+          const regionCount = data.picked.filter(p => p.region === ex.region).length;
+          if (regionCount >= REGION_CAP) continue; // 上限到達でスキップ
+
+          // スコア: 低いほど優先
+          // 1. regionCountが少ない方が優先(まだ薄いregionを埋める)
+          // 2. 部位の picked 数が少ない方が優先(部位間バランス)
+          // 3. モード別: bulkはコンパウンド・重い順 / cutはアイソレーション・軽い順
+          const groupSize = data.picked.length;
+          const compScore = planMode === 'bulk' ? (ex.compound ? 0 : 1) : (ex.compound ? 1 : 0);
+          const rankScore = planMode === 'bulk' ? -ex.rank : ex.rank;
+          const score = [regionCount, groupSize, compScore, rankScore];
+
+          if (bestScore === null ||
+              score[0] < bestScore[0] ||
+              (score[0] === bestScore[0] && score[1] < bestScore[1]) ||
+              (score[0] === bestScore[0] && score[1] === bestScore[1] && score[2] < bestScore[2]) ||
+              (score[0] === bestScore[0] && score[1] === bestScore[1] && score[2] === bestScore[2] && score[3] < bestScore[3])) {
+            bestScore = score;
+            bestIdx = i;
+          }
+        }
+        if (bestIdx === -1) break;
+        const chosen = queue.splice(bestIdx, 1)[0];
+        picksByGroup[chosen.group].picked.push(chosen.exercise);
+        added++;
+      }
+    }
+
+    // STEP 3: 全部位の picked を集めて、最終順序に並べる
+    // バルク: 全種目をコンパウンド優先・重い順 / カット: 軽い順→重い、体幹は最後
+    let allPicked = [];
+    for (const group of selectedGroups) {
+      allPicked = allPicked.concat(picksByGroup[group].picked);
+    }
+
     let sorted;
     if (planMode === 'bulk') {
-      // コンパウンド先(rank大→小)、その後アイソレーション(rank大→小)
-      sorted = items.slice().sort((a, b) => {
+      sorted = allPicked.slice().sort((a, b) => {
         if (a.compound !== b.compound) return a.compound ? -1 : 1;
         return b.rank - a.rank;
       });
     } else {
-      // カット: アイソレーション先(軽め) → 中型 → ヘビーコンパウンドで燃焼
-      // 単純にrank昇順(軽い→重い)、ただし腹筋など極端な体幹isolationは最後
-      sorted = items.slice().sort((a, b) => {
+      sorted = allPicked.slice().sort((a, b) => {
         const ag = a.group === '体幹' ? 1 : 0;
         const bg = b.group === '体幹' ? 1 : 0;
         if (ag !== bg) return ag - bg;
         return a.rank - b.rank;
       });
-      // 体幹は最後にまとめる
-      const core = sorted.filter(x => x.group === '体幹');
-      const other = sorted.filter(x => x.group !== '体幹');
-      sorted = [...other, ...core];
     }
 
-    // 部位ごとに代表種目を選ぶ(同じ部位で偏らないように)
-    // 上から取って、合計4-5種目に収める。複数部位選択時は部位ごとに2種目ずつ目安
-    const perGroupTarget = selectedGroups.length === 1 ? 5 : Math.min(3, Math.ceil(5 / selectedGroups.length) + 1);
-    const groupCount = {};
-    const picked = [];
-    for (const ex of sorted) {
-      const c = groupCount[ex.group] || 0;
-      if (c >= perGroupTarget) continue;
-      picked.push(ex);
-      groupCount[ex.group] = c + 1;
-      if (picked.length >= 5) break;
-    }
-    // 4未満なら追加
-    if (picked.length < 4) {
-      for (const ex of sorted) {
-        if (picked.length >= 5) break;
-        if (!picked.find(p => p.id === ex.id)) picked.push(ex);
-      }
-    }
-
-    // 各種目に推奨重量を付与
-    const planItems = picked.map(ex => ({
+    // 推奨重量を付与
+    const planItems = sorted.map(ex => ({
       ...ex,
       rec: recommendWeight(ex.id, planMode),
     }));
 
-    setPlan({ mode: planMode, groups: [...selectedGroups], items: planItems });
+    setPlan({ mode: planMode, groups: [...selectedGroups], volume, items: planItems });
   };
 
   const startExercise = (exerciseId, rec) => {
@@ -1049,6 +1182,18 @@ function PlanView({ sessions, exerciseModes, setSelectedExerciseId, setWeight, s
       setReps('');
     }
     setView('log');
+  };
+
+  const regionLabel = (region) => {
+    const map = {
+      upper: '上部', mid: '中部', lower: '下部',
+      width: '広がり', thickness: '厚み', lower_back: '腰',
+      anterior: '前部', medial: '中部', posterior: '後部',
+      biceps: '二頭', triceps: '三頭', forearm: '前腕',
+      quad: '大腿四', ham: 'ハム', calf: 'カーフ',
+      glute: '臀', abs: '腹直', oblique: '腹斜',
+    };
+    return map[region] || '';
   };
 
   return (
@@ -1081,7 +1226,7 @@ function PlanView({ sessions, exerciseModes, setSelectedExerciseId, setWeight, s
             color: planMode === 'bulk' ? NEON : '#666',
             borderRadius: 8, fontFamily: 'inherit', fontSize: 12, letterSpacing: 1.5, cursor: 'pointer'
           }}>
-            BULK · 8reps · 重→軽
+            BULK · 8reps
           </button>
           <button onClick={() => setPlanMode('cut')} style={{
             flex: 1, padding: '10px',
@@ -1090,8 +1235,29 @@ function PlanView({ sessions, exerciseModes, setSelectedExerciseId, setWeight, s
             color: planMode === 'cut' ? NEON : '#666',
             borderRadius: 8, fontFamily: 'inherit', fontSize: 12, letterSpacing: 1.5, cursor: 'pointer'
           }}>
-            CUT · 15reps · 軽→重
+            CUT · 15reps
           </button>
+        </div>
+
+        <label style={styles.inputLabel}>VOLUME</label>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+          {[
+            { k: 'light', l: 'LIGHT', s: '短時間' },
+            { k: 'standard', l: 'STANDARD', s: '標準' },
+            { k: 'heavy', l: 'HEAVY', s: '徹底' },
+          ].map(v => (
+            <button key={v.k} onClick={() => setVolume(v.k)} style={{
+              flex: 1, padding: '8px 4px',
+              background: volume === v.k ? 'rgba(0,255,136,0.12)' : '#141414',
+              border: `1px solid ${volume === v.k ? 'rgba(0,255,136,0.4)' : '#222'}`,
+              color: volume === v.k ? NEON : '#666',
+              borderRadius: 8, fontFamily: 'inherit', cursor: 'pointer',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2
+            }}>
+              <span style={{ fontSize: 11, letterSpacing: 1.5, fontWeight: 600 }}>{v.l}</span>
+              <span style={{ fontSize: 9, opacity: 0.7 }}>{v.s}</span>
+            </button>
+          ))}
         </div>
 
         <button onClick={buildPlan} style={styles.primaryBtn}>
@@ -1118,9 +1284,14 @@ function PlanView({ sessions, exerciseModes, setSelectedExerciseId, setWeight, s
                 letterSpacing: 1, flexShrink: 0
               }}>{i + 1}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 3, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 14, fontWeight: 600, color: '#eee' }}>{ex.name}</span>
                   <span style={styles.groupBadge}>{ex.group}</span>
+                  {regionLabel(ex.region) && (
+                    <span style={{ fontSize: 9, color: '#888', letterSpacing: 1, border: '1px solid #333', padding: '2px 5px', borderRadius: 3 }}>
+                      {regionLabel(ex.region)}
+                    </span>
+                  )}
                   {ex.compound && <span style={{ fontSize: 9, color: NEON, letterSpacing: 1 }}>COMP</span>}
                 </div>
                 {ex.rec.weight !== null ? (
@@ -1136,7 +1307,7 @@ function PlanView({ sessions, exerciseModes, setSelectedExerciseId, setWeight, s
             </button>
           ))}
           <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 11, color: '#555', letterSpacing: 1 }}>
-            上から順番に取り組もう · タップで記録画面へ
+            足りなければ「記録」タブから自由に追加 · タップで開始
           </div>
         </React.Fragment>
       )}
