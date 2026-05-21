@@ -1,5 +1,5 @@
 // Iron Log Service Worker
-const CACHE = 'iron-log-v4';
+const CACHE = 'iron-log-v5';
 const FILES = [
   './',
   './index.html',
