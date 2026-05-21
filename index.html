@@ -282,6 +282,54 @@ const ESSENTIAL_REGIONS = {
 const exerciseRegion = (id) => EXERCISE_REGION[id] || 'other';
 
 // === LocalStorage adapter ===
+// === Multi-layer storage with auto-recovery ===
+// Layer 1: localStorage (fast, primary)
+// Layer 2: IndexedDB (persistent across some clears)
+// Layer 3: Cookie checksum (last-resort detection of data presence)
+// 起動時にlocalStorageが空ならIndexedDBから自動復旧
+const DB_NAME = 'iron_log_db';
+const DB_STORE = 'kv';
+
+let _db = null;
+const idbOpen = () => new Promise((resolve) => {
+  if (_db) return resolve(_db);
+  try {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(DB_STORE);
+    };
+    req.onsuccess = () => { _db = req.result; resolve(_db); };
+    req.onerror = () => resolve(null);
+  } catch { resolve(null); }
+});
+
+const idbGet = async (key) => {
+  const db = await idbOpen();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(DB_STORE, 'readonly');
+      const req = tx.objectStore(DB_STORE).get(key);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  });
+};
+
+const idbSet = async (key, value) => {
+  const db = await idbOpen();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    } catch { resolve(); }
+  });
+};
+
+// 初回起動時の自動復旧フラグ(同期処理だがlocalStorage読みは即時)
 const storage = {
   get: (key) => {
     try {
@@ -291,6 +339,21 @@ const storage = {
   },
   set: (key, value) => {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+    // 非同期でIndexedDBにも保存(成功失敗は問わない)
+    idbSet(key, value).catch(() => {});
+  },
+  // 起動時のリカバリ: localStorageが空ならIndexedDBを読んで戻す
+  recover: async (key) => {
+    try {
+      const ls = localStorage.getItem(key);
+      if (ls) return JSON.parse(ls);
+    } catch {}
+    const idbVal = await idbGet(key);
+    if (idbVal != null) {
+      try { localStorage.setItem(key, JSON.stringify(idbVal)); } catch {}
+      return idbVal;
+    }
+    return null;
   },
 };
 
@@ -344,6 +407,37 @@ function App() {
   const [showPicker, setShowPicker] = useState(false);
   const [pickerGroup, setPickerGroup] = useState('全部');
   const [pickerSearch, setPickerSearch] = useState('');
+
+  // === 起動時の自動復旧 ===
+  // localStorageが空でも、IndexedDBに残っていれば自動で戻す
+  useEffect(() => {
+    (async () => {
+      try {
+        const recoveredSessions = await storage.recover('sessions');
+        const recoveredFavs = await storage.recover('favorites');
+        const recoveredModes = await storage.recover('exerciseModes');
+        let recoveredCount = 0;
+        if (recoveredSessions && Array.isArray(recoveredSessions) && recoveredSessions.length > sessions.length) {
+          setSessions(recoveredSessions);
+          recoveredCount = recoveredSessions.length;
+        }
+        if (recoveredFavs && Array.isArray(recoveredFavs) && recoveredFavs.length > favorites.length) {
+          setFavorites(recoveredFavs);
+        }
+        if (recoveredModes && typeof recoveredModes === 'object' && Object.keys(recoveredModes).length > Object.keys(exerciseModes).length) {
+          setExerciseModes(recoveredModes);
+        }
+        if (recoveredCount > 0 && sessions.length === 0) {
+          setTimeout(() => {
+            setToast(`💾 ${recoveredCount}セットを復元しました`);
+            setTimeout(() => setToast(''), 3500);
+          }, 500);
+        }
+      } catch {}
+    })();
+    // 初回のみ実行
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => { storage.set('sessions', sessions); }, [sessions]);
   useEffect(() => { storage.set('favorites', favorites); }, [favorites]);
@@ -1522,6 +1616,20 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   });
 }
+
+// === Persistent Storage request ===
+// ブラウザに「このデータは大事だから消さないで」と依頼
+// 対応ブラウザでは、ストレージ圧迫時にもユーザー操作なしでは消されなくなる
+(async () => {
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      const isPersisted = await navigator.storage.persisted();
+      if (!isPersisted) {
+        await navigator.storage.persist();
+      }
+    }
+  } catch {}
+})();
 </script>
 </body>
 </html>
