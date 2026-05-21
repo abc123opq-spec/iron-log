@@ -45,7 +45,7 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
 const NEON = '#00ff88';
 const NEON_DIM = '#00ff8844';
@@ -324,7 +324,7 @@ function App() {
             logSet={logSet} deleteSession={deleteSession}
           />
         )}
-        {view === 'history' && <HistoryView sessions={sessions} usedExercises={usedExercises} />}
+        {view === 'history' && <HistoryView sessions={sessions} usedExercises={usedExercises} setSessions={setSessions} favorites={favorites} setFavorites={setFavorites} showToast={showToast} />}
         {view === 'browse' && <BrowseView stats={stats} favorites={favorites} toggleFavorite={toggleFavorite} />}
         {view === 'calc' && <CalcView />}
       </div>
@@ -361,6 +361,49 @@ function LogView({ sessions, favorites, selectedExerciseId, setSelectedExerciseI
   const quickIds = [...new Set([...favorites, ...recentIds])].slice(0, 6);
   const quickExercises = quickIds.map(id => PRESET_EXERCISES.find(e => e.id === id)).filter(Boolean);
 
+  // 前回の記録(選択中種目、今日のセッションを除く直近の同一日の全セット)
+  const lastWorkout = useMemo(() => {
+    if (!selectedExerciseId) return null;
+    const past = sessions
+      .filter(s => s.exerciseId === selectedExerciseId && new Date(s.date).toDateString() !== today);
+    if (past.length === 0) return null;
+    const lastDate = new Date(past[0].date).toDateString();
+    const sets = past.filter(s => new Date(s.date).toDateString() === lastDate);
+    return { date: lastDate, sets };
+  }, [selectedExerciseId, sessions, today]);
+
+  // 次セットの推奨(ダブルプログレッション法、目標8回)
+  const TARGET_REPS = 8;
+  const recommendation = useMemo(() => {
+    if (!selectedExerciseId) return null;
+    const todayForEx = todaySessions.filter(s => s.exerciseId === selectedExerciseId);
+    // 今日まだ未着手 → 前回最終セットを基準にダブルプログレッション
+    if (todayForEx.length === 0) {
+      if (!lastWorkout) return null;
+      const lastSet = lastWorkout.sets[0]; // sessionsは新しい順なので[0]が最終セット
+      const achieved = lastSet.reps >= TARGET_REPS;
+      return {
+        weight: achieved ? lastSet.weight + 2.5 : lastSet.weight,
+        reps: TARGET_REPS,
+        reason: achieved ? `前回${lastSet.weight}kg×${lastSet.reps}回達成 +2.5kg` : `前回${lastSet.weight}kg×${lastSet.reps}回 据え置き`
+      };
+    }
+    // 今日2セット目以降 → 直前セットを見て調整
+    const prev = todayForEx[0];
+    if (prev.reps >= TARGET_REPS) {
+      return { weight: prev.weight + 2.5, reps: TARGET_REPS, reason: `${prev.reps}回達成 +2.5kg` };
+    } else if (prev.reps < TARGET_REPS - 3) {
+      return { weight: Math.max(0, prev.weight - 2.5), reps: TARGET_REPS, reason: `${prev.reps}回 −2.5kg` };
+    }
+    return { weight: prev.weight, reps: TARGET_REPS, reason: `${prev.reps}回 同重量で継続` };
+  }, [selectedExerciseId, todaySessions, lastWorkout]);
+
+  const applyRecommendation = () => {
+    if (!recommendation) return;
+    setWeight(String(recommendation.weight));
+    setReps(String(recommendation.reps));
+  };
+
   return (
     <div style={{ animation: 'slideUp 0.3s ease' }}>
       <SectionLabel text="TODAY · " accent={new Date().toLocaleDateString('ja-JP', { month: 'short', day: 'numeric', weekday: 'short' })} />
@@ -387,6 +430,43 @@ function LogView({ sessions, favorites, selectedExerciseId, setSelectedExerciseI
           </span>
           {selectedExercise && <span style={styles.groupBadge}>{selectedExercise.group}</span>}
         </button>
+
+        {selectedExercise && lastWorkout && (
+          <div style={{ marginTop: 12, padding: 10, background: '#0d0d0d', border: '1px solid #1a1a1a', borderRadius: 8 }}>
+            <div style={{ fontSize: 9, color: '#555', letterSpacing: 1.5, marginBottom: 6 }}>
+              LAST · {new Date(lastWorkout.sets[0].date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {lastWorkout.sets.slice().reverse().map((s, i) => (
+                <span key={s.id} style={{ background: '#1a1a1a', border: '1px solid #222', color: '#ccc', padding: '4px 8px', borderRadius: 6, fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
+                  <span style={{ color: '#666' }}>{i+1}</span> {s.weight}<span style={{ color: '#666' }}>kg</span> × {s.reps}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {selectedExercise && recommendation && (
+          <button onClick={applyRecommendation} style={{
+            width: '100%', marginTop: 10, padding: '12px 14px',
+            background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.3)',
+            borderRadius: 10, color: '#eee', textAlign: 'left',
+            fontFamily: 'inherit', cursor: 'pointer', display: 'flex',
+            justifyContent: 'space-between', alignItems: 'center', gap: 8
+          }}>
+            <div>
+              <div style={{ fontSize: 9, color: NEON, letterSpacing: 1.5, marginBottom: 4 }}>NEXT · 推奨</div>
+              <div style={{ fontSize: 16, fontWeight: 600, fontFamily: 'Bebas Neue, sans-serif', letterSpacing: 1 }}>
+                <span style={{ color: NEON }}>{recommendation.weight}</span>
+                <span style={{ color: '#666', fontSize: 12, margin: '0 4px' }}>kg</span>
+                ×
+                <span style={{ color: NEON, marginLeft: 4 }}>{recommendation.reps}</span>
+              </div>
+              <div style={{ fontSize: 10, color: '#777', marginTop: 3 }}>{recommendation.reason}</div>
+            </div>
+            <div style={{ fontSize: 10, color: NEON, letterSpacing: 1, padding: '6px 10px', border: '1px solid rgba(0,255,136,0.3)', borderRadius: 6 }}>TAP</div>
+          </button>
+        )}
 
         <div style={{ display: 'flex', gap: 12, marginTop: 14 }}>
           <div style={{ flex: 1 }}>
@@ -497,13 +577,68 @@ function ExercisePicker({ list, group, setGroup, search, setSearch, favorites, t
   );
 }
 
-function HistoryView({ sessions, usedExercises }) {
+function HistoryView({ sessions, usedExercises, setSessions, favorites, setFavorites, showToast }) {
   const [picked, setPicked] = useState(usedExercises[0]?.id || null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     if (picked && !usedExercises.find(e => e.id === picked)) setPicked(usedExercises[0]?.id || null);
     else if (!picked && usedExercises.length > 0) setPicked(usedExercises[0].id);
   }, [usedExercises, picked]);
+
+  const exportData = () => {
+    const data = {
+      app: 'IRON LOG',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      sessions,
+      favorites
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const stamp = new Date().toISOString().slice(0,10).replace(/-/g, '');
+    a.download = `iron-log-backup-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`${sessions.length}セットをエクスポート`);
+  };
+
+  const importData = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!data.sessions || !Array.isArray(data.sessions)) throw new Error('形式が違います');
+        const mode = window.confirm(
+          `${data.sessions.length}セットを読み込みます。\n\n[OK] 現在の記録と統合(重複は除外)\n[キャンセル] 何もしない`
+        );
+        if (!mode) return;
+        const existingIds = new Set(sessions.map(s => s.id));
+        const merged = [...sessions];
+        let added = 0;
+        data.sessions.forEach(s => {
+          if (!existingIds.has(s.id)) { merged.push(s); added++; }
+        });
+        merged.sort((a, b) => new Date(b.date) - new Date(a.date));
+        setSessions(merged);
+        if (Array.isArray(data.favorites)) {
+          setFavorites([...new Set([...favorites, ...data.favorites])]);
+        }
+        showToast(`${added}セットを追加`);
+      } catch (err) {
+        alert('読み込みに失敗しました: ' + err.message);
+      } finally {
+        e.target.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
 
   const chartData = useMemo(() => {
     if (!picked) return [];
@@ -516,9 +651,33 @@ function HistoryView({ sessions, usedExercises }) {
       }));
   }, [picked, sessions]);
 
+  const backupSection = (
+    <React.Fragment>
+      <SectionLabel text="BACKUP" />
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <button onClick={exportData} style={{
+          flex: 1, background: '#141414', border: '1px solid #222',
+          color: '#eee', padding: '10px 12px', borderRadius: 10,
+          fontFamily: 'inherit', fontSize: 12, letterSpacing: 1, cursor: 'pointer'
+        }}>
+          <span style={{ color: NEON, marginRight: 6 }}>↓</span>EXPORT
+        </button>
+        <button onClick={() => fileInputRef.current?.click()} style={{
+          flex: 1, background: '#141414', border: '1px solid #222',
+          color: '#eee', padding: '10px 12px', borderRadius: 10,
+          fontFamily: 'inherit', fontSize: 12, letterSpacing: 1, cursor: 'pointer'
+        }}>
+          <span style={{ color: NEON, marginRight: 6 }}>↑</span>IMPORT
+        </button>
+        <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={importData} style={{ display: 'none' }} />
+      </div>
+    </React.Fragment>
+  );
+
   if (usedExercises.length === 0) {
     return (
       <div style={{ animation: 'slideUp 0.3s ease' }}>
+        {backupSection}
         <SectionLabel text="PROGRESS" />
         <div style={styles.empty}>まずは記録から始めよう</div>
       </div>
@@ -527,6 +686,7 @@ function HistoryView({ sessions, usedExercises }) {
 
   return (
     <div style={{ animation: 'slideUp 0.3s ease' }}>
+      {backupSection}
       <SectionLabel text="PROGRESS" />
       <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8, marginBottom: 16 }} className="scroll">
         {usedExercises.map((ex) => (
