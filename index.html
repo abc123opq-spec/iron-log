@@ -73,6 +73,7 @@ const IconZap = (p) => <Icon {...p} d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />;
 const IconActivity = (p) => <Icon {...p} d="M22 12h-4l-3 9L9 3l-3 9H2" />;
 const IconTarget = (p) => <Icon {...p} d="M12 12m-10 0a10 10 0 1 0 20 0a10 10 0 1 0-20 0M12 12m-6 0a6 6 0 1 0 12 0a6 6 0 1 0-12 0M12 12m-2 0a2 2 0 1 0 4 0a2 2 0 1 0-4 0" />;
 const IconTrend = (p) => <Icon {...p} d={['M3 17l6-6 4 4 8-8','M14 7h7v7']} />;
+const IconPlan = (p) => <Icon {...p} d={['M8 6h13','M8 12h13','M8 18h13','M3 6h.01','M3 12h.01','M3 18h.01']} />;
 
 // === Search icon needs circle ===
 const SearchIcon = ({ size = 14, color = '#555' }) => (
@@ -170,6 +171,63 @@ const PRESET_EXERCISES = [
 
 const GROUPS = ['全部', '胸', '背中', '肩', '腕', '脚', 'お尻', '体幹'];
 
+// === 種目の分類とプライオリティ ===
+// コンパウンド(多関節)種目のID一覧
+// エビデンス: バルクは多関節→単関節(MJ→SJ)で多関節の筋力向上に有利(Nunes et al. 2020 meta-analysis)
+const COMPOUND_IDS = new Set([
+  // 胸
+  'bench','incline_bench','decline_bench','db_bench','incline_db_press','decline_db_press',
+  'chest_press_m','pushup','dips_chest',
+  // 背中
+  'deadlift','romanian_dl','sumo_dl','bent_row','pendlay_row','t_bar_row','one_hand_row',
+  'seated_row','lat_pulldown','pullup','chinup','good_morning',
+  // 肩
+  'ohp','db_shoulder_press','arnold_press','behind_neck_press','machine_shoulder',
+  // 腕
+  'close_grip_bench','dips_tri',
+  // 脚
+  'squat','front_squat','hack_squat','bulgarian_squat','split_squat','goblet_squat',
+  'leg_press','lunge','walking_lunge','step_up',
+  // お尻
+  'hip_thrust','glute_bridge',
+]);
+
+// 種目の負荷ランク(数値が大きいほど重い・先に行うべき)
+// バルクでは数値の大きい順、カットでは逆順で実施
+const LIFT_RANK = {
+  // 最高(全身コンパウンド・最重量)
+  deadlift: 100, squat: 99, sumo_dl: 98, romanian_dl: 95, front_squat: 94,
+  // プレス系・プル系の大物
+  bench: 90, incline_bench: 88, ohp: 87, decline_bench: 86,
+  pullup: 85, chinup: 84, db_bench: 83, incline_db_press: 82, decline_db_press: 81,
+  // 中型コンパウンド
+  bent_row: 78, pendlay_row: 77, t_bar_row: 76, hip_thrust: 75,
+  hack_squat: 74, leg_press: 73, bulgarian_squat: 72, lunge: 71, walking_lunge: 70,
+  db_shoulder_press: 69, arnold_press: 68, behind_neck_press: 67, machine_shoulder: 66,
+  one_hand_row: 65, seated_row: 64, lat_pulldown: 63,
+  // 軽めコンパウンド・自重
+  chest_press_m: 60, pushup: 58, dips_chest: 57, dips_tri: 56,
+  close_grip_bench: 55, good_morning: 54, split_squat: 52, goblet_squat: 51,
+  step_up: 50, glute_bridge: 49,
+  // アイソレーション
+  db_fly: 40, incline_db_fly: 39, cable_crossover: 38, pec_fly: 37, pullover: 36,
+  shrug: 35, face_pull: 34, back_ext: 33,
+  side_raise: 32, front_raise: 31, rear_delt_fly: 30, upright_row: 29, cable_lateral: 28,
+  bb_curl: 27, ez_curl: 26, db_curl: 25, hammer_curl: 24, incline_curl: 23,
+  preacher_curl: 22, concentration_curl: 21, cable_curl: 20,
+  tricep_pushdown: 19, french_press: 18, skull_crusher: 17, overhead_ext: 16, kickback: 15,
+  leg_ext: 14, leg_curl: 13, sissy_squat: 12,
+  cable_kickback: 11, abductor: 10,
+  calf_raise: 9, seated_calf: 8,
+  wrist_curl: 7, reverse_curl: 6,
+  // 体幹(腹筋系は最後)
+  cable_crunch: 5, hanging_leg_raise: 4, ab_rollout: 3, leg_raise: 2,
+  crunch: 1, russian_twist: 1, plank: 1, side_bend: 1,
+};
+
+const isCompound = (id) => COMPOUND_IDS.has(id);
+const liftRank = (id) => LIFT_RANK[id] || 0;
+
 // === LocalStorage adapter ===
 const storage = {
   get: (key) => {
@@ -225,6 +283,7 @@ function App() {
   const [view, setView] = useState('log');
   const [sessions, setSessions] = useState(() => storage.get('sessions') || []);
   const [favorites, setFavorites] = useState(() => storage.get('favorites') || []);
+  const [exerciseModes, setExerciseModes] = useState(() => storage.get('exerciseModes') || {});
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
   const [weight, setWeight] = useState('');
   const [reps, setReps] = useState('');
@@ -235,9 +294,14 @@ function App() {
 
   useEffect(() => { storage.set('sessions', sessions); }, [sessions]);
   useEffect(() => { storage.set('favorites', favorites); }, [favorites]);
+  useEffect(() => { storage.set('exerciseModes', exerciseModes); }, [exerciseModes]);
 
   const toggleFavorite = (id) => {
     setFavorites(favorites.includes(id) ? favorites.filter(x => x !== id) : [...favorites, id]);
+  };
+
+  const toggleMode = (id) => {
+    setExerciseModes({ ...exerciseModes, [id]: exerciseModes[id] === 'cut' ? 'bulk' : 'cut' });
   };
 
   const showToast = (msg) => {
@@ -322,10 +386,12 @@ function App() {
             weight={weight} setWeight={setWeight}
             reps={reps} setReps={setReps}
             logSet={logSet} deleteSession={deleteSession}
+            exerciseModes={exerciseModes} toggleMode={toggleMode}
           />
         )}
-        {view === 'history' && <HistoryView sessions={sessions} usedExercises={usedExercises} setSessions={setSessions} favorites={favorites} setFavorites={setFavorites} showToast={showToast} />}
+        {view === 'history' && <HistoryView sessions={sessions} usedExercises={usedExercises} setSessions={setSessions} favorites={favorites} setFavorites={setFavorites} exerciseModes={exerciseModes} setExerciseModes={setExerciseModes} showToast={showToast} />}
         {view === 'browse' && <BrowseView stats={stats} favorites={favorites} toggleFavorite={toggleFavorite} />}
+        {view === 'plan' && <PlanView sessions={sessions} exerciseModes={exerciseModes} setSelectedExerciseId={setSelectedExerciseId} setWeight={setWeight} setReps={setReps} setView={setView} showToast={showToast} />}
         {view === 'calc' && <CalcView />}
       </div>
 
@@ -333,6 +399,7 @@ function App() {
         <Tab icon={<IconZap size={18} />} label="記録" active={view === 'log'} onClick={() => setView('log')} />
         <Tab icon={<IconActivity size={18} />} label="履歴" active={view === 'history'} onClick={() => setView('history')} />
         <Tab icon={<IconTarget size={18} />} label="種目" active={view === 'browse'} onClick={() => setView('browse')} />
+        <Tab icon={<IconPlan size={18} />} label="計画" active={view === 'plan'} onClick={() => setView('plan')} />
         <Tab icon={<IconTrend size={18} />} label="1RM" active={view === 'calc'} onClick={() => setView('calc')} />
       </div>
 
@@ -352,10 +419,11 @@ function App() {
   );
 }
 
-function LogView({ sessions, favorites, selectedExerciseId, setSelectedExerciseId, setShowPicker, weight, setWeight, reps, setReps, logSet, deleteSession }) {
+function LogView({ sessions, favorites, selectedExerciseId, setSelectedExerciseId, setShowPicker, weight, setWeight, reps, setReps, logSet, deleteSession, exerciseModes, toggleMode }) {
   const today = new Date().toDateString();
   const todaySessions = sessions.filter((s) => new Date(s.date).toDateString() === today);
   const selectedExercise = PRESET_EXERCISES.find(e => e.id === selectedExerciseId);
+  const currentMode = selectedExerciseId ? (exerciseModes[selectedExerciseId] || 'bulk') : 'bulk';
 
   const recentIds = [...new Set(sessions.slice(0, 30).map(s => s.exerciseId))].slice(0, 5);
   const quickIds = [...new Set([...favorites, ...recentIds])].slice(0, 6);
@@ -372,31 +440,58 @@ function LogView({ sessions, favorites, selectedExerciseId, setSelectedExerciseI
     return { date: lastDate, sets };
   }, [selectedExerciseId, sessions, today]);
 
-  // 次セットの推奨(ダブルプログレッション法、目標8回)
-  const TARGET_REPS = 8;
+  // 次セットの推奨(バルク=8回目標、カット=15回目標)
+  // ロジック: ACSMガイドライン準拠 (バルク 8-12reps@70-85%1RM / カット 12-20reps@<70%1RM)
+  // セットごとに重量を下げて回数を維持する現実的運用に対応
   const recommendation = useMemo(() => {
     if (!selectedExerciseId) return null;
+    const isBulk = currentMode === 'bulk';
+    const targetReps = isBulk ? 8 : 15;
+    const lowFloor = isBulk ? 5 : 11; // これ以下なら重量を落とす
     const todayForEx = todaySessions.filter(s => s.exerciseId === selectedExerciseId);
-    // 今日まだ未着手 → 前回最終セットを基準にダブルプログレッション
+
+    // 今日まだ未着手 → 前回1セット目を基準に判定
     if (todayForEx.length === 0) {
       if (!lastWorkout) return null;
-      const lastSet = lastWorkout.sets[0]; // sessionsは新しい順なので[0]が最終セット
-      const achieved = lastSet.reps >= TARGET_REPS;
+      // 前回の1セット目を取得(sessionsは新しい順なので最後尾が1セット目)
+      const firstSet = lastWorkout.sets[lastWorkout.sets.length - 1];
+      if (firstSet.reps >= targetReps) {
+        return {
+          weight: firstSet.weight + 2.5,
+          reps: targetReps,
+          setNum: 1,
+          reason: `前回1set ${firstSet.weight}kg×${firstSet.reps} → 達成 +2.5kg`
+        };
+      } else if (firstSet.reps <= lowFloor) {
+        return {
+          weight: Math.max(0, firstSet.weight - 2.5),
+          reps: targetReps,
+          setNum: 1,
+          reason: `前回1set ${firstSet.weight}kg×${firstSet.reps} → 低調 −2.5kg`
+        };
+      }
       return {
-        weight: achieved ? lastSet.weight + 2.5 : lastSet.weight,
-        reps: TARGET_REPS,
-        reason: achieved ? `前回${lastSet.weight}kg×${lastSet.reps}回達成 +2.5kg` : `前回${lastSet.weight}kg×${lastSet.reps}回 据え置き`
+        weight: firstSet.weight,
+        reps: targetReps,
+        setNum: 1,
+        reason: `前回1set ${firstSet.weight}kg×${firstSet.reps} → 同重量で継続`
       };
     }
-    // 今日2セット目以降 → 直前セットを見て調整
-    const prev = todayForEx[0];
-    if (prev.reps >= TARGET_REPS) {
-      return { weight: prev.weight + 2.5, reps: TARGET_REPS, reason: `${prev.reps}回達成 +2.5kg` };
-    } else if (prev.reps < TARGET_REPS - 3) {
-      return { weight: Math.max(0, prev.weight - 2.5), reps: TARGET_REPS, reason: `${prev.reps}回 −2.5kg` };
-    }
-    return { weight: prev.weight, reps: TARGET_REPS, reason: `${prev.reps}回 同重量で継続` };
-  }, [selectedExerciseId, todaySessions, lastWorkout]);
+
+    // 2セット目以降 → 直前セットを見つつ、疲労を考慮して重量を下げる
+    const prev = todayForEx[0]; // 直前セット
+    const setNum = todayForEx.length + 1;
+    // 直前が極端に低調なら更に -2.5kg、それ以外も基本 -2.5kg(疲労前提)
+    const drop = prev.reps <= lowFloor ? 5 : 2.5;
+    const newWeight = Math.max(0, prev.weight - drop);
+    const minReps = isBulk ? 6 : 12;
+    return {
+      weight: newWeight,
+      reps: minReps,
+      setNum,
+      reason: `${setNum}set目 −${drop}kg(疲労を考慮)`
+    };
+  }, [selectedExerciseId, todaySessions, lastWorkout, currentMode]);
 
   const applyRecommendation = () => {
     if (!recommendation) return;
@@ -431,6 +526,29 @@ function LogView({ sessions, favorites, selectedExerciseId, setSelectedExerciseI
           {selectedExercise && <span style={styles.groupBadge}>{selectedExercise.group}</span>}
         </button>
 
+        {selectedExercise && (
+          <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+            <button onClick={() => toggleMode(selectedExerciseId)} style={{
+              flex: 1, padding: '8px 12px',
+              background: currentMode === 'bulk' ? 'rgba(0,255,136,0.12)' : '#141414',
+              border: `1px solid ${currentMode === 'bulk' ? 'rgba(0,255,136,0.4)' : '#222'}`,
+              color: currentMode === 'bulk' ? NEON : '#666',
+              borderRadius: 8, fontFamily: 'inherit', fontSize: 11, letterSpacing: 1.5, cursor: 'pointer'
+            }}>
+              BULK · 8reps
+            </button>
+            <button onClick={() => toggleMode(selectedExerciseId)} style={{
+              flex: 1, padding: '8px 12px',
+              background: currentMode === 'cut' ? 'rgba(0,255,136,0.12)' : '#141414',
+              border: `1px solid ${currentMode === 'cut' ? 'rgba(0,255,136,0.4)' : '#222'}`,
+              color: currentMode === 'cut' ? NEON : '#666',
+              borderRadius: 8, fontFamily: 'inherit', fontSize: 11, letterSpacing: 1.5, cursor: 'pointer'
+            }}>
+              CUT · 15reps
+            </button>
+          </div>
+        )}
+
         {selectedExercise && lastWorkout && (
           <div style={{ marginTop: 12, padding: 10, background: '#0d0d0d', border: '1px solid #1a1a1a', borderRadius: 8 }}>
             <div style={{ fontSize: 9, color: '#555', letterSpacing: 1.5, marginBottom: 6 }}>
@@ -455,7 +573,9 @@ function LogView({ sessions, favorites, selectedExerciseId, setSelectedExerciseI
             justifyContent: 'space-between', alignItems: 'center', gap: 8
           }}>
             <div>
-              <div style={{ fontSize: 9, color: NEON, letterSpacing: 1.5, marginBottom: 4 }}>NEXT · 推奨</div>
+              <div style={{ fontSize: 9, color: NEON, letterSpacing: 1.5, marginBottom: 4 }}>
+                NEXT · {recommendation.setNum}set目 推奨
+              </div>
               <div style={{ fontSize: 16, fontWeight: 600, fontFamily: 'Bebas Neue, sans-serif', letterSpacing: 1 }}>
                 <span style={{ color: NEON }}>{recommendation.weight}</span>
                 <span style={{ color: '#666', fontSize: 12, margin: '0 4px' }}>kg</span>
@@ -577,7 +697,7 @@ function ExercisePicker({ list, group, setGroup, search, setSearch, favorites, t
   );
 }
 
-function HistoryView({ sessions, usedExercises, setSessions, favorites, setFavorites, showToast }) {
+function HistoryView({ sessions, usedExercises, setSessions, favorites, setFavorites, exerciseModes, setExerciseModes, showToast }) {
   const [picked, setPicked] = useState(usedExercises[0]?.id || null);
   const fileInputRef = useRef(null);
 
@@ -589,10 +709,11 @@ function HistoryView({ sessions, usedExercises, setSessions, favorites, setFavor
   const exportData = () => {
     const data = {
       app: 'IRON LOG',
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
       sessions,
-      favorites
+      favorites,
+      exerciseModes
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -629,6 +750,9 @@ function HistoryView({ sessions, usedExercises, setSessions, favorites, setFavor
         setSessions(merged);
         if (Array.isArray(data.favorites)) {
           setFavorites([...new Set([...favorites, ...data.favorites])]);
+        }
+        if (data.exerciseModes && typeof data.exerciseModes === 'object') {
+          setExerciseModes({ ...exerciseModes, ...data.exerciseModes });
         }
         showToast(`${added}セットを追加`);
       } catch (err) {
@@ -805,6 +929,216 @@ function BrowseView({ stats, favorites, toggleFavorite }) {
             })}
           </div>
         ))
+      )}
+    </div>
+  );
+}
+
+function PlanView({ sessions, exerciseModes, setSelectedExerciseId, setWeight, setReps, setView, showToast }) {
+  const [selectedGroups, setSelectedGroups] = useState([]);
+  const [planMode, setPlanMode] = useState('bulk'); // 'bulk' | 'cut'
+  const [plan, setPlan] = useState(null); // 生成されたメニュー
+  const PARTS = ['胸', '背中', '肩', '腕', '脚', 'お尻', '体幹'];
+
+  const toggleGroup = (g) => {
+    setSelectedGroups(selectedGroups.includes(g)
+      ? selectedGroups.filter(x => x !== g)
+      : [...selectedGroups, g]);
+  };
+
+  // 種目ごとの「前回1セット目の重量」を取得
+  const getLastFirstSetWeight = (exerciseId) => {
+    const past = sessions.filter(s => s.exerciseId === exerciseId);
+    if (past.length === 0) return null;
+    // sessionsは新しい順なので、最新のセッション日付を見つける
+    const latestDate = new Date(past[0].date).toDateString();
+    const sameDay = past.filter(s => new Date(s.date).toDateString() === latestDate);
+    // 同じ日のうち最も古いものが1セット目
+    const firstSet = sameDay[sameDay.length - 1];
+    return { weight: firstSet.weight, reps: firstSet.reps };
+  };
+
+  // 重量推奨を計算
+  const recommendWeight = (exerciseId, mode) => {
+    const last = getLastFirstSetWeight(exerciseId);
+    const targetReps = mode === 'bulk' ? 8 : 15;
+    const lowFloor = mode === 'bulk' ? 5 : 11;
+    if (!last) return { weight: null, reps: targetReps, isNew: true };
+    if (last.reps >= targetReps) {
+      return { weight: last.weight + 2.5, reps: targetReps, isNew: false, note: '前回達成 +2.5kg' };
+    } else if (last.reps <= lowFloor) {
+      return { weight: Math.max(0, last.weight - 2.5), reps: targetReps, isNew: false, note: '前回低調 −2.5kg' };
+    }
+    return { weight: last.weight, reps: targetReps, isNew: false, note: '同重量で継続' };
+  };
+
+  const buildPlan = () => {
+    if (selectedGroups.length === 0) {
+      showToast('部位を選んでね');
+      return;
+    }
+    // 選択部位の全種目を取得
+    let candidates = PRESET_EXERCISES.filter(e => selectedGroups.includes(e.group));
+    // 種目ごとのモード(個別設定>選択部位の今回モード)
+    const items = candidates.map(ex => ({
+      ...ex,
+      mode: exerciseModes[ex.id] || planMode,
+      rank: liftRank(ex.id),
+      compound: isCompound(ex.id),
+    }));
+
+    // バルク優先(コンパウンド優先・重い順) / カット優先(軽め・アイソレーション → コンパウンドで仕上げ)
+    let sorted;
+    if (planMode === 'bulk') {
+      // コンパウンド先(rank大→小)、その後アイソレーション(rank大→小)
+      sorted = items.slice().sort((a, b) => {
+        if (a.compound !== b.compound) return a.compound ? -1 : 1;
+        return b.rank - a.rank;
+      });
+    } else {
+      // カット: アイソレーション先(軽め) → 中型 → ヘビーコンパウンドで燃焼
+      // 単純にrank昇順(軽い→重い)、ただし腹筋など極端な体幹isolationは最後
+      sorted = items.slice().sort((a, b) => {
+        const ag = a.group === '体幹' ? 1 : 0;
+        const bg = b.group === '体幹' ? 1 : 0;
+        if (ag !== bg) return ag - bg;
+        return a.rank - b.rank;
+      });
+      // 体幹は最後にまとめる
+      const core = sorted.filter(x => x.group === '体幹');
+      const other = sorted.filter(x => x.group !== '体幹');
+      sorted = [...other, ...core];
+    }
+
+    // 部位ごとに代表種目を選ぶ(同じ部位で偏らないように)
+    // 上から取って、合計4-5種目に収める。複数部位選択時は部位ごとに2種目ずつ目安
+    const perGroupTarget = selectedGroups.length === 1 ? 5 : Math.min(3, Math.ceil(5 / selectedGroups.length) + 1);
+    const groupCount = {};
+    const picked = [];
+    for (const ex of sorted) {
+      const c = groupCount[ex.group] || 0;
+      if (c >= perGroupTarget) continue;
+      picked.push(ex);
+      groupCount[ex.group] = c + 1;
+      if (picked.length >= 5) break;
+    }
+    // 4未満なら追加
+    if (picked.length < 4) {
+      for (const ex of sorted) {
+        if (picked.length >= 5) break;
+        if (!picked.find(p => p.id === ex.id)) picked.push(ex);
+      }
+    }
+
+    // 各種目に推奨重量を付与
+    const planItems = picked.map(ex => ({
+      ...ex,
+      rec: recommendWeight(ex.id, planMode),
+    }));
+
+    setPlan({ mode: planMode, groups: [...selectedGroups], items: planItems });
+  };
+
+  const startExercise = (exerciseId, rec) => {
+    setSelectedExerciseId(exerciseId);
+    if (rec.weight !== null) {
+      setWeight(String(rec.weight));
+      setReps(String(rec.reps));
+    } else {
+      setWeight('');
+      setReps('');
+    }
+    setView('log');
+  };
+
+  return (
+    <div style={{ animation: 'slideUp 0.3s ease' }}>
+      <SectionLabel text="TODAY'S PLAN" />
+
+      <div style={styles.card}>
+        <label style={styles.inputLabel}>BODY PARTS · 複数選択可</label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+          {PARTS.map(g => (
+            <button key={g} onClick={() => toggleGroup(g)} style={{
+              padding: '8px 14px',
+              background: selectedGroups.includes(g) ? 'rgba(0,255,136,0.12)' : '#141414',
+              border: `1px solid ${selectedGroups.includes(g) ? 'rgba(0,255,136,0.4)' : '#222'}`,
+              color: selectedGroups.includes(g) ? NEON : '#888',
+              borderRadius: 999, fontFamily: 'inherit', fontSize: 13, cursor: 'pointer',
+              fontWeight: selectedGroups.includes(g) ? 600 : 400
+            }}>
+              {g}
+            </button>
+          ))}
+        </div>
+
+        <label style={styles.inputLabel}>MODE</label>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+          <button onClick={() => setPlanMode('bulk')} style={{
+            flex: 1, padding: '10px',
+            background: planMode === 'bulk' ? 'rgba(0,255,136,0.12)' : '#141414',
+            border: `1px solid ${planMode === 'bulk' ? 'rgba(0,255,136,0.4)' : '#222'}`,
+            color: planMode === 'bulk' ? NEON : '#666',
+            borderRadius: 8, fontFamily: 'inherit', fontSize: 12, letterSpacing: 1.5, cursor: 'pointer'
+          }}>
+            BULK · 8reps · 重→軽
+          </button>
+          <button onClick={() => setPlanMode('cut')} style={{
+            flex: 1, padding: '10px',
+            background: planMode === 'cut' ? 'rgba(0,255,136,0.12)' : '#141414',
+            border: `1px solid ${planMode === 'cut' ? 'rgba(0,255,136,0.4)' : '#222'}`,
+            color: planMode === 'cut' ? NEON : '#666',
+            borderRadius: 8, fontFamily: 'inherit', fontSize: 12, letterSpacing: 1.5, cursor: 'pointer'
+          }}>
+            CUT · 15reps · 軽→重
+          </button>
+        </div>
+
+        <button onClick={buildPlan} style={styles.primaryBtn}>
+          <IconPlus size={18} color="#000" /> メニューを作る
+        </button>
+      </div>
+
+      {plan && (
+        <React.Fragment>
+          <SectionLabel text={`MENU · ${plan.groups.join(' / ')}`} accent={`${plan.items.length}`} />
+          {plan.items.map((ex, i) => (
+            <button key={ex.id} onClick={() => startExercise(ex.id, ex.rec)} style={{
+              width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+              background: '#141414', border: '1px solid #222',
+              borderRadius: 12, padding: 14, marginBottom: 8,
+              textAlign: 'left', fontFamily: 'inherit', cursor: 'pointer',
+              color: '#eee'
+            }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 8,
+                background: 'rgba(0,255,136,0.12)', color: NEON,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 16, fontWeight: 700, fontFamily: 'Bebas Neue, sans-serif',
+                letterSpacing: 1, flexShrink: 0
+              }}>{i + 1}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: '#eee' }}>{ex.name}</span>
+                  <span style={styles.groupBadge}>{ex.group}</span>
+                  {ex.compound && <span style={{ fontSize: 9, color: NEON, letterSpacing: 1 }}>COMP</span>}
+                </div>
+                {ex.rec.weight !== null ? (
+                  <div style={{ fontSize: 12, color: '#888', fontVariantNumeric: 'tabular-nums' }}>
+                    推奨 <span style={{ color: NEON, fontWeight: 600 }}>{ex.rec.weight}kg × {ex.rec.reps}</span>
+                    <span style={{ color: '#555', marginLeft: 6, fontSize: 10 }}>{ex.rec.note}</span>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#666' }}>初回 · 適切な重量を選んで</div>
+                )}
+              </div>
+              <span style={{ color: NEON, fontSize: 18 }}>›</span>
+            </button>
+          ))}
+          <div style={{ padding: '14px 0', textAlign: 'center', fontSize: 11, color: '#555', letterSpacing: 1 }}>
+            上から順番に取り組もう · タップで記録画面へ
+          </div>
+        </React.Fragment>
       )}
     </div>
   );
