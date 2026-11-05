@@ -46,20 +46,30 @@ function doGet(e) {
   return handleRequest_(e);
 }
 
-/** ロックの中で ingest を実行し、結果を文字として返す */
+/**
+ * ロックの中で ingest を実行し、結果を文字として返す。
+ * 合言葉はロックを取る前に確かめる（合言葉の違う要求がロックを占めないように）。ingest の中でも同じ確認をする。
+ */
 function handleRequest_(e) {
   var text;
-  var lock = LockService.getScriptLock();
-  var locked = false;
+  var lock = null;
   try {
-    lock.waitLock(LOCK_WAIT_MS_);
-    locked = true;
-    text = ingest((e && e.parameter) || {}, gasDeps_());
+    var params = (e && e.parameter) || {};
+    var deps = gasDeps_();
+    if (!deps.expectedToken) {
+      text = 'ERROR: 合言葉が設定されていません';
+    } else if (params.token !== deps.expectedToken) {
+      text = 'ERROR: 合言葉が違います';
+    } else {
+      lock = LockService.getScriptLock();
+      lock.waitLock(LOCK_WAIT_MS_);
+      text = ingest(params, deps);
+    }
   } catch (err) {
     if (typeof console !== 'undefined' && console.error) console.error(err);
     text = 'ERROR: ' + (err && err.message !== undefined ? err.message : String(err));
   } finally {
-    if (locked) lock.releaseLock();
+    if (lock) lock.releaseLock();
   }
   return ContentService.createTextOutput(text).setMimeType(ContentService.MimeType.TEXT);
 }
@@ -100,20 +110,23 @@ function loadSettings_() {
 /**
  * 体重ログを全行書き直す。1行目は見出し、2行目から日付順のデータ。
  * 日付・測定時刻・受信日時の列は書式を文字列（'@'）にしてから書く（日付に変換されないように）。体重は数値のまま。
+ * 先に新しい行を書き、そのあとで余った古い行だけを消す（書き込みが途中で失敗しても、ログが見出しだけにならないように）。
  */
 function saveLog_(log) {
   var sheet = openSheet_(SHEET_LOG_);
+  var n = log.length;
   sheet.getRange(1, 1, 1, LOG_HEADER_.length).setValues([LOG_HEADER_]);
-  var lastRow = sheet.getLastRow();
-  if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, LOG_HEADER_.length).clearContent();
-  if (log.length === 0) return;
-  sheet.getRange(2, 1, log.length, 1).setNumberFormat('@');   // A 日付
-  sheet.getRange(2, 3, log.length, 2).setNumberFormat('@');   // C 測定時刻・D 受信日時
-  var values = [];
-  for (var i = 0; i < log.length; i++) {
-    values.push([log[i].date, log[i].kg, log[i].time, log[i].received]);
+  if (n > 0) {
+    sheet.getRange(2, 1, n, 1).setNumberFormat('@');   // A 日付
+    sheet.getRange(2, 3, n, 2).setNumberFormat('@');   // C 測定時刻・D 受信日時
+    var values = [];
+    for (var i = 0; i < n; i++) {
+      values.push([log[i].date, log[i].kg, log[i].time, log[i].received]);
+    }
+    sheet.getRange(2, 1, n, LOG_HEADER_.length).setValues(values);
   }
-  sheet.getRange(2, 1, log.length, LOG_HEADER_.length).setValues(values);
+  var lastRow = sheet.getLastRow();
+  if (lastRow > n + 1) sheet.getRange(n + 2, 1, lastRow - n - 1, LOG_HEADER_.length).clearContent();
 }
 
 // ---- 手動テスト（Apps Script エディタから実行。シートには書かない） --------------
@@ -136,4 +149,4 @@ function testIngest() {
   console.log(ingest({ token: deps.expectedToken, samples: samples }, deps));
 }
 
-if (typeof module !== 'undefined') module.exports = { ingest };
+if (typeof module !== 'undefined') module.exports = { ingest, handleRequest_, saveLog_ };

@@ -135,7 +135,7 @@ function parseLogValues(values) {
  * 返り値: { goalDate, goalKg, startDate, checkpoints: [{ date, kg }, ...]（日付順） }
  */
 function parseSettingsValues(values) {
-  var goalDate = '', goalKg = NaN, startDate = '';
+  var goalDate = '', goalKg = NaN, startDate = '', startRowNo = 0;
   var checkpoints = [];
   for (var i = 0; i < values.length; i++) {
     var row = values[i] || [];
@@ -153,6 +153,7 @@ function parseSettingsValues(values) {
       if (isBlank(row[1])) continue;
       startDate = toYmd(row[1]);
       if (startDate === '') throw new Error('設定シートの開始日の形式が違います（' + rowNo + '行目）');
+      startRowNo = rowNo;
     } else if (label === 'チェックポイント') {
       if (isBlank(row[1]) && isBlank(row[2])) continue;
       var cpDate = toYmd(row[1]);
@@ -166,6 +167,7 @@ function parseSettingsValues(values) {
   if (goalDate === '') throw new Error('設定シートに目標日がありません');
   if (!isFinite(goalKg)) throw new Error('設定シートに目標体重がありません');
   if (startDate === '') throw new Error('設定シートに開始日がありません');
+  if (startDate >= goalDate) throw new Error('開始日は目標日より前の日付にしてください（' + startRowNo + '行目）');
   for (var j = 0; j < checkpoints.length; j++) {
     if (checkpoints[j].date >= goalDate) {
       throw new Error('チェックポイントは目標日より前の日付にしてください（' + checkpoints[j].rowNo + '行目）');
@@ -195,12 +197,14 @@ function isValidYmd(y, mo, d) {
 }
 
 /**
- * 1行（`YYYY-MM-DDTHH:mm[:ss][Z|±HH:MM],体重`）を読む。
- * 時差がなければ +09:00 とみなす。読めなければ null。
+ * 1行（`YYYY-MM-DDTHH:mm[:ss][Z|±HH:MM],体重[ kg]`）を読む。
+ * 時差がなければ +09:00 とみなす。体重は `71.6` のような10進の数字だけ（16進・指数は読まない）。
+ * ショートカットの「値」が `71.6 kg` のように単位つきになっても読めるよう、後ろの `kg`（大文字小文字どちらでも。
+ * 前に空白・NBSP・細い空白があってもよい）は無視する。kg 以外の単位は読まない。読めなければ null。
  * 返り値: { at: Date, kg: number }
  */
 function parseSampleLine(line) {
-  var m = line.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:\d{2})?\s*,\s*(\S+)$/);
+  var m = line.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:\d{2})?\s*,\s*(\d+(?:\.\d+)?)[\s  ]*(?:[kK][gG])?$/);
   if (!m) return null;
   var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
   var h = Number(m[4]), mi = Number(m[5]), s = m[6] === undefined ? 0 : Number(m[6]);
@@ -554,8 +558,9 @@ function buildPageModel(r, settings, sheetUrl) {
     forecast: r.forecast === null ? NO_VALUE : fmt1(r.forecast),
     worse: '遅い方のペース ' + (r.worsePace === null ? NO_VALUE : fmtSigned(r.worsePace, 2) + '/週'),
     need: r.needPace === null ? NO_VALUE : fmtSigned(r.needPace, 2),
-    needSub: r.avg7 !== null && r.daysLeft > 0
-      ? '残り' + r.daysLeft + '日で ' + fmt1(r.avg7 - goalKg) + 'kg'
+    needSub: r.daysLeft < 0 ? '目標日を過ぎています'
+      : r.daysLeft === 0 ? '今日が目標日です'
+      : r.avg7 !== null ? '残り' + r.daysLeft + '日で ' + fmt1(r.avg7 - goalKg) + 'kg'
       : '残り' + r.daysLeft + '日',
     progressPct: r.progress === null ? null : Math.round(r.progress * 100),
     progressSub: (r.startTarget === null ? NO_VALUE : fmt1(r.startTarget)) + ' → ' + fmt1(goalKg)
@@ -582,14 +587,20 @@ function buildPageModel(r, settings, sheetUrl) {
     todayIndex: todayIndex,
     checkpoints: checkpoints,
     goal: { index: dates.length - 1, kg: goalKg },
-    forecast: r.forecastLine === null ? null
+    // 今日が系列（開始日〜目標日）の外なら、予測の線は描かない（値は readouts.forecast に出す）
+    forecast: r.forecastLine === null || todayIndex === null ? null
       : { fromIndex: todayIndex, fromKg: r.forecastLine.fromKg, toIndex: dates.length - 1, toKg: r.forecastLine.toKg }
   };
+
+  // 上部の行の右側。残り日数が正なら「着地まで T−n 日」（tMinus）、目標日当日とそのあとは goalNote の文を出す
+  var goalNote = r.daysLeft > 0 ? null
+    : r.daysLeft === 0 ? '今日が着地日'
+    : '着地日から ' + (-r.daysLeft) + ' 日';
 
   return {
     state: 'ok',
     sheetUrl: sheetUrl,
-    header: { measured: measured, tMinus: r.daysLeft },
+    header: { measured: measured, tMinus: r.daysLeft, goalNote: goalNote },
     hero: hero,
     readouts: readouts,
     missingNote: missingNote,

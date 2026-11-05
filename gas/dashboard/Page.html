@@ -122,7 +122,8 @@
   <section id="view-ok" hidden>
     <div class="row top">
       <span id="measured"></span>
-      <span class="tminus">着地まで <span class="mag">T−<span id="t-minus"></span></span> 日</span>
+      <span class="tminus" id="countdown">着地まで <span class="mag">T−<span id="t-minus"></span></span> 日</span>
+      <span class="tminus" id="goal-note" hidden></span>
     </div>
 
     <section class="panel hero">
@@ -216,7 +217,9 @@
 
     // 上部の行
     text('measured', m.header.measured);
-    text('t-minus', m.header.tMinus);
+    // 残り日数が正なら「着地まで T−n 日」。目標日当日とそのあとは goalNote（「今日が着地日」「着地日から n 日」）
+    if (m.header.goalNote === null || m.header.goalNote === undefined) { text('t-minus', m.header.tMinus); }
+    else { $('countdown').hidden = true; text('goal-note', m.header.goalNote); $('goal-note').hidden = false; }
 
     // ヒーロー
     const h = m.hero;
@@ -252,7 +255,7 @@
 
   // ---- グラフ（仕様書6.1「グラフ」）----
   const SVG_NS = 'http://www.w3.org/2000/svg';
-  const CH = 240, PLOT_TOP = 44, PLOT_BOTTOM = 200, PAD_LEFT = 4, Y_LABEL_W = 36;
+  const CH = 240, PLOT_TOP = 44, PLOT_BOTTOM = 200, PAD_LEFT = 4, Y_LABEL_GAP = 8, Y_LABEL_PAD = 2;
   const COLOR = { line: '#1C2636', text: '#EAF0F7', sub: '#8592A6', faint: '#4E5A6E', dot: '#5B6779', cyan: '#38E1FF', magenta: '#FF4FD8', panel: '#0A0F1A' };
   const f1 = v => { const s = Math.abs(v).toFixed(1); return (v < 0 && s !== '0.0' ? '−' : '') + s; };   // 負は U+2212
   const md = d => Number(d.slice(5, 7)) + '/' + Number(d.slice(8, 10));
@@ -281,9 +284,9 @@
     const n = chart.dates.length;
     if (!n) return;
     const W = Math.max(120, Math.round(svg.getBoundingClientRect().width) || 339);   // 幅が測れないときは iPhone の幅
-    const L = PAD_LEFT, R = W - Y_LABEL_W, T = PLOT_TOP, B = PLOT_BOTTOM;
+    const L = PAD_LEFT, T = PLOT_TOP, B = PLOT_BOTTOM;
     const todayI = isNum(chart.todayIndex) ? chart.todayIndex : null;
-    const fc = chart.forecast && isNum(chart.forecast.toKg) ? chart.forecast : null;
+    const fc = chart.forecast && isNum(chart.forecast.fromIndex) && isNum(chart.forecast.toKg) ? chart.forecast : null;
     const goal = chart.goal;
 
     // 縦軸の範囲：最小−0.5を0.5単位で切り下げ、最大＋0.5を0.5単位で切り上げ
@@ -295,6 +298,10 @@
     if (!vals.length) return;
     let lo = Math.floor((Math.min(...vals) - 0.5) * 2) / 2, hi = Math.ceil((Math.max(...vals) + 0.5) * 2) / 2;
     if (hi - lo < 1) { lo -= 0.5; hi += 0.5; }
+    // 右の縦軸の幅：いちばん長い目盛りの文字（3桁の体重なら「100.0」）が収まる幅＋間隔
+    const yTicks = []; for (let v = Math.ceil(lo); v <= hi; v += 1) yTicks.push(v);
+    const yLabelW = Math.ceil(Math.max(...yTicks.map(v => textW(f1(v), 12)))) + Y_LABEL_GAP + Y_LABEL_PAD;
+    const R = W - yLabelW;
     const x = i => L + (R - L) * (n > 1 ? i / (n - 1) : 0.5);
     const y = v => B - (B - T) * (v - lo) / (hi - lo);
     svg.__xOf = x;
@@ -315,10 +322,10 @@
     };
 
     // グリッドと縦軸（右側）：1kgごと
-    for (let v = Math.ceil(lo); v <= hi; v += 1) {
+    for (const v of yTicks) {
       const Y = Math.round(y(v)) + 0.5;
       el('line', { x1: L, x2: R, y1: Y, y2: Y, stroke: COLOR.line, 'stroke-width': 1 });
-      txt(R + 8, Y + 4, f1(v), { 'data-role': 'y-tick' });
+      txt(R + Y_LABEL_GAP, Y + 4, f1(v), { 'data-role': 'y-tick' });
     }
     // 横軸：開始日・中間の2点・目標日
     const xi = [0, Math.round((n - 1) / 3), Math.round(2 * (n - 1) / 3), n - 1].filter((v, k, a) => a.indexOf(v) === k);

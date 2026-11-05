@@ -119,3 +119,44 @@ run('目標日の近くでもラベルが重ならない', async () => {
     await settled(page); await shot(page, 'near-goal');
   } finally { await browser.close(); }
 });
+
+// ---- 最終レビュー(3)(11) ----
+run('目標日のあとは上部の行に二重のマイナスを出さない', async () => {
+  const { browser, page, errors } = await openPage(M.buildPageModel(M.computeReport(LOG, SETTINGS, '2026-12-08'), SETTINGS, ''));
+  try {
+    const t = (await page.innerText('.top')).replace(/\s+/g, ' ').trim();   // 見えている文字だけ（hidden の要素は含めない）
+    assert.ok(!/−-|--|T−-/.test(t), '二重のマイナス: ' + t);
+    assert.ok(t.includes('着地日から 3 日'), t);
+    assert.ok(!t.includes('着地まで'), t);
+    assert.equal(await page.isVisible('#countdown'), false); assert.equal(await page.isVisible('#goal-note'), true);
+    assert.equal(await page.textContent('#need-sub'), '目標日を過ぎています');
+    assert.deepEqual(errors, []);
+    await shot(page, 'post-goal');
+  } finally { await browser.close(); }
+});
+run('今日が目標日なら「今日が着地日」', async () => {
+  const { browser, page, errors } = await openPage(M.buildPageModel(M.computeReport(LOG, SETTINGS, '2026-12-05'), SETTINGS, ''));
+  try {
+    const t = (await page.innerText('.top')).replace(/\s+/g, ' ').trim();
+    assert.ok(t.includes('今日が着地日') && !t.includes('着地まで'), t);
+    assert.equal(await page.textContent('#need-sub'), '今日が目標日です');
+    assert.deepEqual(errors, []);
+  } finally { await browser.close(); }
+});
+run('3桁の体重でも縦軸の目盛りがグラフの中に収まる', async () => {
+  const heavy = LOG.map(r => ({ ...r, kg: Math.round((r.kg + 32) * 10) / 10 }));   // 架空：103〜106kg
+  const s2 = { ...SETTINGS, goalKg: 102, checkpoints: [{ date: '2026-11-01', kg: 103.8 }] };
+  const { browser, page, errors } = await openPage(M.buildPageModel(M.computeReport(heavy, s2, '2026-11-04'), s2, ''));
+  try {
+    const ticks = await page.locator('#chart [data-role="y-tick"]').allTextContents();
+    assert.ok(ticks.includes('100.0') || ticks.includes('101.0'), ticks.join(','));
+    const svg = await page.locator('#chart').boundingBox();
+    const n = await page.locator('#chart [data-role="y-tick"]').count();
+    for (let i = 0; i < n; i++) {
+      const b = await page.locator('#chart [data-role="y-tick"]').nth(i).boundingBox();
+      assert.ok(b.x + b.width <= svg.x + svg.width + 0.5, ticks[i] + ' が右にはみ出す: ' + (b.x + b.width - svg.x - svg.width).toFixed(1) + 'px');
+    }
+    assert.deepEqual(errors, []);
+    await shot(page, 'heavy');
+  } finally { await browser.close(); }
+});

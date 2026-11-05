@@ -51,3 +51,64 @@ test('保存するログは日付順で、元のログは変えない', () => {
   assert.deepEqual(dates, [...dates].sort());
   assert.equal(d.saved[0].length, base.length + 2);
 });
+// ---- 最終レビュー(1)(8)：Apps Script の入口の動き（LockService などを偽物に差し替えて確かめる） ----
+const { saveLog_, handleRequest_ } = require('../ingest/Code.js');
+const withGas = (fakes, fn) => {
+  const names = ['PropertiesService', 'SpreadsheetApp', 'LockService', 'ContentService'];
+  const saved = names.map(n => globalThis[n]);
+  Object.assign(globalThis, fakes);
+  try { return fn(); } finally { names.forEach((n, i) => { if (saved[i] === undefined) delete globalThis[n]; else globalThis[n] = saved[i]; }); }
+};
+const props = (p) => ({ getScriptProperties: () => ({ getProperty: k => (k in p ? p[k] : null) }) });
+const fakeSheet = (lastRow) => {
+  const calls = [];
+  const range = (desc) => ({
+    setValues: v => { calls.push(['setValues', desc, v]); },
+    clearContent: () => { calls.push(['clearContent', desc]); },
+    setNumberFormat: f => { calls.push(['setNumberFormat', desc, f]); }
+  });
+  const sheet = { getRange: (...a) => range(a), getLastRow: () => lastRow };
+  return { calls, app: { openById: () => ({ getSheetByName: n => (n === '体重ログ' ? sheet : null) }) } };
+};
+const LOG3 = [{ date: '2026-11-02', kg: 71.4, time: '07:00', received: 'r' }, { date: '2026-11-03', kg: 71.3, time: '06:50', received: 'r' }, { date: '2026-11-04', kg: 71.6, time: '07:12', received: 'r' }];
+test('saveLog_は先に新しい行を書き、そのあとで余った行だけを消す（途中で失敗しても記録が残る）', () => {
+  const s = fakeSheet(6);   // 見出し＋古い5行
+  withGas({ PropertiesService: props({ SHEET_ID: 'fake' }), SpreadsheetApp: s.app }, () => saveLog_(LOG3));
+  const i = (name, desc) => s.calls.findIndex(c => c[0] === name && JSON.stringify(c[1]) === JSON.stringify(desc));
+  assert.ok(i('setValues', [1, 1, 1, 4]) >= 0, '見出し');
+  assert.ok(i('setNumberFormat', [2, 1, 3, 1]) >= 0 && s.calls[i('setNumberFormat', [2, 1, 3, 1])][2] === '@', 'A列は文字');
+  assert.ok(i('setNumberFormat', [2, 3, 3, 2]) >= 0 && s.calls[i('setNumberFormat', [2, 3, 3, 2])][2] === '@', 'C・D列は文字');
+  assert.ok(!s.calls.some(c => c[0] === 'setNumberFormat' && c[1][1] === 2), 'B列（体重）は数値のまま');
+  const w = i('setValues', [2, 1, 3, 4]), cl = i('clearContent', [5, 1, 2, 4]);
+  assert.ok(w >= 0, '2〜4行目に書く'); assert.deepEqual(s.calls[w][2], LOG3.map(r => [r.date, r.kg, r.time, r.received]));
+  assert.ok(cl >= 0, '5〜6行目だけ消す'); assert.ok(w < cl, '書いてから消す');
+  assert.equal(s.calls.filter(c => c[0] === 'clearContent').length, 1);
+});
+test('saveLog_は余った行がなければ何も消さない', () => {
+  for (const lastRow of [1, 2, 4]) {
+    const s = fakeSheet(lastRow);
+    withGas({ PropertiesService: props({ SHEET_ID: 'fake' }), SpreadsheetApp: s.app }, () => saveLog_(LOG3));
+    assert.equal(s.calls.filter(c => c[0] === 'clearContent').length, 0, 'lastRow=' + lastRow);
+    assert.ok(s.calls.some(c => c[0] === 'setValues' && c[1][0] === 2), 'lastRow=' + lastRow);
+  }
+});
+const gasEntry = (p, params) => {
+  const calls = [];
+  const fakes = {
+    PropertiesService: props(p),
+    LockService: { getScriptLock: () => ({ waitLock: () => calls.push('waitLock'), releaseLock: () => calls.push('releaseLock') }) },
+    ContentService: { MimeType: { TEXT: 'text' }, createTextOutput: t => ({ text: t, setMimeType() { return this; } }) }
+  };
+  const out = withGas(fakes, () => handleRequest_({ parameter: params }));
+  return { calls, text: out.text };
+};
+test('handleRequest_は合言葉を確かめてからロックを取る', () => {
+  let r = gasEntry({ INGEST_TOKEN: 't0k3n' }, { token: 'x', samples: '2026-11-04T07:12,71.6' });
+  assert.equal(r.text, 'ERROR: 合言葉が違います'); assert.deepEqual(r.calls, []);
+  r = gasEntry({ INGEST_TOKEN: 't0k3n' }, { samples: '2026-11-04T07:12,71.6' });
+  assert.equal(r.text, 'ERROR: 合言葉が違います'); assert.deepEqual(r.calls, []);
+  r = gasEntry({}, { token: 't0k3n', samples: '2026-11-04T07:12,71.6' });
+  assert.equal(r.text, 'ERROR: 合言葉が設定されていません'); assert.deepEqual(r.calls, []);
+  r = gasEntry({ INGEST_TOKEN: 't0k3n' }, { token: 't0k3n', samples: 'bad' });   // 合言葉が合えばロックの中で ingest が動く
+  assert.equal(r.text, 'ERROR: 有効な測定がありません'); assert.deepEqual(r.calls, ['waitLock', 'releaseLock']);
+});

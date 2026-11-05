@@ -43,3 +43,12 @@ test('境界：30と200は受け付け、1時間先ちょうどと60日前ちょ
   assert.equal(r.rejected, 2);
   assert.deepEqual(r.rows.map(x => [x.date, x.time, x.kg]), [['2026-09-05', '23:00', 70], ['2026-11-04', '23:59', 30], ['2026-11-05', '00:00', 200]]);
 });
+// 最終レビュー(2)：ショートカットの「値」が `71.6 kg` のように単位つきになっても読む。kg 以外の単位や 16進・指数は読まない
+test('体重の後ろの kg（空白・NBSP・細い空白つき）は受け付ける', () => {
+  const lines = ['2026-11-04T07:12,71.6 kg', '2026-11-04T07:12,71.6kg', '2026-11-04T07:12,71.6 kg', '2026-11-04T07:12,71.6 kg', '2026-11-04T07:12,71.6 KG'];
+  for (const line of lines) assert.deepEqual(M.parseSamples(line, NOW), { rows: [{ date: '2026-11-04', time: '07:12', kg: 71.6 }], rejected: 0 }, JSON.stringify(line));
+});
+test('kg 以外の単位、16進、指数は捨てる', () => {
+  for (const line of ['2026-11-04T07:12,158 lb', '2026-11-04T07:12,0x46', '2026-11-04T07:12,7e1', '2026-11-04T07:12,71.6 kgs', '2026-11-04T07:12,kg'])
+    assert.deepEqual(M.parseSamples(line, NOW), { rows: [], rejected: 1 }, JSON.stringify(line));
+});
