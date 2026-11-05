@@ -173,17 +173,29 @@
 <script>
   const MODEL = <?!= dataJson ?>;
 
-  (function render(m) {
-    const $ = id => document.getElementById(id);
-    const text = (id, v) => { $(id).textContent = v === null || v === undefined ? '' : String(v); };
+  const $ = id => document.getElementById(id);
+  const text = (id, v) => { $(id).textContent = v === null || v === undefined ? '' : String(v); };
 
+  /** ほかの画面を隠してエラー画面を出す（仕様書10章：予期しない例外はエラー画面） */
+  function showError(message) {
+    $('view-ok').hidden = true; $('empty').hidden = true;
+    text('error-message', message);
+    $('error').hidden = false;
+  }
+
+  function render(m) {
+    try {
+      fill(m);
+    } catch (e) {
+      console.error(e);
+      showError(e && e.message !== undefined ? e.message : String(e));
+    }
+  }
+
+  function fill(m) {
     if (m.sheetUrl) { $('sheet-link').href = m.sheetUrl; $('footer').hidden = false; }
 
-    if (m.state === 'error') {
-      text('error-message', m.message || '');
-      $('error').hidden = false;
-      return;
-    }
+    if (m.state === 'error') { showError(m.message || ''); return; }
     if (m.state !== 'ok') { $('empty').hidden = false; return; }
 
     // 上部の行
@@ -218,7 +230,9 @@
     if (m.missingNote !== null) { text('missing', m.missingNote); $('missing-note').hidden = false; }
 
     $('view-ok').hidden = false;
-  })(MODEL);
+  }
+
+  render(MODEL);
 </script>
 </body>
 </html>

@@ -31,6 +31,18 @@ run('エラーの画面', async () => {
   for (const s of ['表示できませんでした', '設定シートに目標日がありません', '直し方：スプレッドシートの「設定」または「体重ログ」シートを直してから、このページを開き直してください。']) assert.ok(t.includes(s));
   await shot(page, 'error'); await browser.close();
 });
+run('描画中の例外はエラー画面にする（真っ黒にしない）', async () => {
+  const { browser, page, errors } = await openPage({ state: 'ok', hero: null });   // hero.kg で TypeError
+  try {
+    assert.equal(await page.isVisible('#error'), true, 'エラー画面が見える');
+    const t = await page.textContent('#error');
+    assert.ok(t.includes('表示できませんでした')); assert.ok(t.includes('直し方：'));
+    assert.ok((await page.textContent('#error-message')).length > 0);
+    assert.equal(await page.isVisible('#view-ok'), false); assert.equal(await page.isVisible('#empty'), false);
+    assert.ok(errors.length >= 1, 'console.error に記録される');   // わざと例外を起こしているので errors は空にならない
+    await shot(page, 'render-error');
+  } finally { await browser.close(); }
+});
 run('要注意の画面', async () => {
   const s2 = { ...SETTINGS, checkpoints: [{ date: '2026-11-01', kg: 71.0 }] };
   const { browser, page } = await openPage(M.buildPageModel(M.computeReport(LOG, s2, '2026-11-04'), s2, ''));
