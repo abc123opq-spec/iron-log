@@ -180,6 +180,98 @@ function parseSettingsValues(values) {
   };
 }
 
+// ---- 測定行の読み取り（iPhoneショートカットからの本文） -----------------------
+
+var SAMPLE_MAX_LINES = 100;
+var SAMPLE_MIN_KG = 30;
+var SAMPLE_MAX_KG = 200;
+var SAMPLE_FUTURE_MS = 3600000;          // now より1時間を超えて先は捨てる
+var SAMPLE_PAST_MS = 60 * MS_PER_DAY;    // now の60日前より前は捨てる
+
+/** 暦として正しい年月日か（2月30日などを弾く） */
+function isValidYmd(y, mo, d) {
+  if (mo < 1 || mo > 12 || d < 1) return false;
+  return new Date(Date.UTC(y, mo - 1, d)).getUTCDate() === d;
+}
+
+/**
+ * 1行（`YYYY-MM-DDTHH:mm[:ss][Z|±HH:MM],体重`）を読む。
+ * 時差がなければ +09:00 とみなす。読めなければ null。
+ * 返り値: { at: Date, kg: number }
+ */
+function parseSampleLine(line) {
+  var m = line.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:\d{2})?\s*,\s*(\S+)$/);
+  if (!m) return null;
+  var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  var h = Number(m[4]), mi = Number(m[5]), s = m[6] === undefined ? 0 : Number(m[6]);
+  if (!isValidYmd(y, mo, d) || h > 23 || mi > 59 || s > 59) return null;
+  var offset = m[7] === undefined ? '+09:00' : m[7];
+  var at = new Date(m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5] + ':' + pad2(s) + offset);
+  if (!isValidDate(at)) return null;
+  var kg = toNumber(m[8]);
+  if (!isFinite(kg)) return null;
+  return { at: at, kg: kg };
+}
+
+/**
+ * ショートカットの本文（1行1測定）を読み、1日1件（その日いちばん早い時刻）にまとめる。
+ * 捨てる行：形式違い、30未満または200より大きい、now より1時間を超えて先、now の60日前より前。
+ * 空行は数えず、空でない行の101行目以降は読まない。
+ * 返り値: { rows: [{ date, time, kg }, ...]（日付順）, rejected: 捨てた行数 }
+ */
+function parseSamples(text, now) {
+  var lines = String(text === null || text === undefined ? '' : text).split(/\r?\n/);
+  var nowMs = now.getTime();
+  var byDate = {};
+  var rejected = 0;
+  var seen = 0;
+  for (var i = 0; i < lines.length && seen < SAMPLE_MAX_LINES; i++) {
+    var line = lines[i].trim();
+    if (line === '') continue;
+    seen++;
+    var p = parseSampleLine(line);
+    if (p === null || p.kg < SAMPLE_MIN_KG || p.kg > SAMPLE_MAX_KG) { rejected++; continue; }
+    var atMs = p.at.getTime();
+    if (atMs > nowMs + SAMPLE_FUTURE_MS || atMs < nowMs - SAMPLE_PAST_MS) { rejected++; continue; }
+    var sample = { date: toYmd(p.at), time: toHm(p.at), kg: p.kg };
+    var cur = byDate[sample.date];
+    if (!cur || sample.time < cur.time) byDate[sample.date] = sample;
+  }
+  var rows = [];
+  for (var date in byDate) if (Object.prototype.hasOwnProperty.call(byDate, date)) rows.push(byDate[date]);
+  rows.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+  return { rows: rows, rejected: rejected };
+}
+
+/**
+ * 体重ログに測定をまとめて入れる。入力の log は変えない。
+ * その日の行がなければ追加。あれば、ログの時刻のほうが遅いときだけ上書き。
+ * 同じ時刻で体重だけ違えば上書き、同じなら変えない。
+ * 返り値: { log: 日付順の新しい配列, changed: 追加・変更した日付（昇順） }
+ */
+function mergeDaily(log, rows, received) {
+  var byDate = {};
+  for (var i = 0; i < log.length; i++) {
+    var r = log[i];
+    byDate[r.date] = { date: r.date, kg: r.kg, time: r.time, received: r.received };
+  }
+  var changed = [];
+  for (var j = 0; j < rows.length; j++) {
+    var s = rows[j];
+    var cur = byDate[s.date];
+    var replace = !cur || s.time < cur.time || (s.time === cur.time && s.kg !== cur.kg);
+    if (!replace) continue;
+    byDate[s.date] = { date: s.date, kg: s.kg, time: s.time, received: received };
+    if (changed.indexOf(s.date) < 0) changed.push(s.date);
+  }
+  var out = [];
+  for (var date in byDate) if (Object.prototype.hasOwnProperty.call(byDate, date)) out.push(byDate[date]);
+  var byYmd = function (a, b) { return a < b ? -1 : a > b ? 1 : 0; };
+  out.sort(function (a, b) { return byYmd(a.date, b.date); });
+  changed.sort(byYmd);
+  return { log: out, changed: changed };
+}
+
 if (typeof module !== 'undefined') module.exports = {
   toYmd: toYmd,
   toHm: toHm,
@@ -187,5 +279,7 @@ if (typeof module !== 'undefined') module.exports = {
   addDays: addDays,
   daysBetween: daysBetween,
   parseLogValues: parseLogValues,
-  parseSettingsValues: parseSettingsValues
+  parseSettingsValues: parseSettingsValues,
+  parseSamples: parseSamples,
+  mergeDaily: mergeDaily
 };
