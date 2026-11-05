@@ -85,9 +85,24 @@
   #progress-bar { height: 3px; width: 0; background: var(--cyan); }
   .cell .note.after-bar { margin-top: 6px; }
 
-  /* グラフ（中身は Task 7 で描く） */
-  .chart-panel { padding: 18px 12px 12px; }
-  #chart { display: block; width: 100%; height: 240px; }
+  /* グラフ（仕様書6.1「グラフ」） */
+  .chart-panel { position: relative; padding: 18px 12px 12px; }
+  #chart { display: block; width: 100%; height: 240px; touch-action: pan-y; overflow: visible; }
+  #chart text { font-family: inherit; font-variant-numeric: tabular-nums; }
+  /* 読み込み時に7日平均の線を一度だけ描く（pathLength="1" なので全長＝1） */
+  #chart [data-role="avg7"] { stroke-dasharray: 1; stroke-dashoffset: 0; animation: draw-line 900ms ease-out; }
+  @keyframes draw-line { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  #chart.redraw [data-role="avg7"] { animation: none; }
+  @media (prefers-reduced-motion: reduce) {
+    #chart [data-role="avg7"] { animation: none; stroke-dashoffset: 0; }
+  }
+  #tooltip {
+    position: absolute; z-index: 1; pointer-events: none; white-space: nowrap;
+    padding: 6px 9px; border-radius: 8px;
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  }
+  #tooltip .d { color: var(--sub); }
 
   /* 注意メモ・フッター */
   .missing { margin: 16px 6px 0; line-height: 18px; color: var(--sub); }
@@ -154,6 +169,7 @@
 
     <section class="panel chart-panel">
       <svg id="chart" role="img" aria-label="降下プロット"></svg>
+      <div id="tooltip" hidden></div>
     </section>
 
     <p id="missing-note" class="missing" hidden><span class="mark">●</span>　<span id="missing"></span></p>
@@ -229,7 +245,219 @@
     // 注意メモ
     if (m.missingNote !== null) { text('missing', m.missingNote); $('missing-note').hidden = false; }
 
+    // グラフ。幅を測るために先に画面を出す（例外が出れば showError が隠し直す）
     $('view-ok').hidden = false;
+    if (m.chart) drawChart($('chart'), m.chart);
+  }
+
+  // ---- グラフ（仕様書6.1「グラフ」）----
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const CH = 240, PLOT_TOP = 44, PLOT_BOTTOM = 200, PAD_LEFT = 4, Y_LABEL_W = 36;
+  const COLOR = { line: '#1C2636', text: '#EAF0F7', sub: '#8592A6', faint: '#4E5A6E', dot: '#5B6779', cyan: '#38E1FF', magenta: '#FF4FD8', panel: '#0A0F1A' };
+  const f1 = v => { const s = Math.abs(v).toFixed(1); return (v < 0 && s !== '0.0' ? '−' : '') + s; };   // 負は U+2212
+  const md = d => Number(d.slice(5, 7)) + '/' + Number(d.slice(8, 10));
+  const isNum = v => typeof v === 'number' && isFinite(v);
+  /** 文字幅のおおよそ（全角12px・半角7px） */
+  const textW = (s, size) => Array.from(s).reduce((w, c) => w + (c.charCodeAt(0) > 255 ? size : size * 0.58), 0);
+
+  /** 7日平均の点列を Catmull-Rom 曲線（3次ベジェ）に直す。null の切れ目ごとに別の M で始める */
+  function smoothPath(runs) {
+    let d = '';
+    for (const p of runs) {
+      d += (d ? ' ' : '') + 'M' + p[0][0] + ',' + p[0][1];
+      if (p.length === 1) { d += ' l0,0'; continue; }
+      for (let k = 0; k < p.length - 1; k++) {
+        const p0 = p[k - 1] || p[k], p1 = p[k], p2 = p[k + 1], p3 = p[k + 2] || p2;
+        d += ' C' + (p1[0] + (p2[0] - p0[0]) / 6) + ',' + (p1[1] + (p2[1] - p0[1]) / 6) +
+             ' ' + (p2[0] - (p3[0] - p1[0]) / 6) + ',' + (p2[1] - (p3[1] - p1[1]) / 6) +
+             ' ' + p2[0] + ',' + p2[1];
+      }
+    }
+    return d;
+  }
+
+  /** グラフを描く。1ユーザー単位＝1CSSピクセル。svg.__xOf(i) で日付番号→x座標（テスト用） */
+  function drawChart(svg, chart) {
+    const n = chart.dates.length;
+    if (!n) return;
+    const W = Math.max(120, Math.round(svg.getBoundingClientRect().width) || 339);   // 幅が測れないときは iPhone の幅
+    const L = PAD_LEFT, R = W - Y_LABEL_W, T = PLOT_TOP, B = PLOT_BOTTOM;
+    const todayI = isNum(chart.todayIndex) ? chart.todayIndex : null;
+    const fc = chart.forecast && isNum(chart.forecast.toKg) ? chart.forecast : null;
+    const goal = chart.goal;
+
+    // 縦軸の範囲：最小−0.5を0.5単位で切り下げ、最大＋0.5を0.5単位で切り上げ
+    const vals = [];
+    for (let i = 0; i < n; i++) for (const v of [chart.kg[i], chart.avg7[i], chart.target[i]]) if (isNum(v)) vals.push(v);
+    if (fc) vals.push(fc.toKg, fc.fromKg);
+    if (goal && isNum(goal.kg)) vals.push(goal.kg);
+    for (const c of chart.checkpoints || []) if (isNum(c.kg)) vals.push(c.kg);
+    if (!vals.length) return;
+    let lo = Math.floor((Math.min(...vals) - 0.5) * 2) / 2, hi = Math.ceil((Math.max(...vals) + 0.5) * 2) / 2;
+    if (hi - lo < 1) { lo -= 0.5; hi += 0.5; }
+    const x = i => L + (R - L) * (n > 1 ? i / (n - 1) : 0.5);
+    const y = v => B - (B - T) * (v - lo) / (hi - lo);
+    svg.__xOf = x;
+
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + CH);
+    svg.setAttribute('width', W); svg.setAttribute('height', CH);
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const el = (tag, attrs, parent) => {
+      const e = document.createElementNS(SVG_NS, tag);
+      for (const k in attrs) e.setAttribute(k, attrs[k]);
+      (parent || svg).appendChild(e);
+      return e;
+    };
+    const txt = (X, Y, str, attrs, parent) => {
+      const e = el('text', Object.assign({ x: X, y: Y, 'font-size': 12, fill: COLOR.sub }, attrs), parent);
+      e.textContent = str;
+      return e;
+    };
+
+    // グリッドと縦軸（右側）：1kgごと
+    for (let v = Math.ceil(lo); v <= hi; v += 1) {
+      const Y = Math.round(y(v)) + 0.5;
+      el('line', { x1: L, x2: R, y1: Y, y2: Y, stroke: COLOR.line, 'stroke-width': 1 });
+      txt(R + 8, Y + 4, f1(v), { 'data-role': 'y-tick' });
+    }
+    // 横軸：開始日・中間の2点・目標日
+    const xi = [0, Math.round((n - 1) / 3), Math.round(2 * (n - 1) / 3), n - 1].filter((v, k, a) => a.indexOf(v) === k);
+    for (const i of xi) txt(x(i), B + 22, md(chart.dates[i]), { 'data-role': 'x-tick', 'text-anchor': i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle' });
+
+    // 目標ライン（マゼンタの丸い点の点線）
+    let t0 = -1, t1 = -1;
+    for (let i = 0; i < n; i++) if (isNum(chart.target[i])) { if (t0 < 0) t0 = i; t1 = i; }
+    if (t0 >= 0) el('line', { 'data-role': 'target', x1: x(t0), y1: y(chart.target[t0]), x2: x(t1), y2: y(chart.target[t1]),
+      stroke: COLOR.magenta, 'stroke-width': 1.5, 'stroke-dasharray': '0 4', 'stroke-linecap': 'round' });
+
+    // 日々の体重（直径4px）
+    for (let i = 0; i < n; i++) if (isNum(chart.kg[i])) el('circle', { 'data-role': 'weight-dot', cx: x(i), cy: y(chart.kg[i]), r: 2, fill: COLOR.dot });
+
+    // 予測（今日の7日平均→目標日、破線・不透明度70%、終点は白抜きの丸）
+    if (fc) {
+      const g = el('g', { 'data-role': 'forecast' });
+      el('line', { x1: x(fc.fromIndex), y1: y(fc.fromKg), x2: x(fc.toIndex), y2: y(fc.toKg),
+        stroke: COLOR.cyan, 'stroke-width': 1.5, 'stroke-dasharray': '5 4', 'stroke-linecap': 'round', opacity: 0.7 }, g);
+      el('circle', { cx: x(fc.toIndex), cy: y(fc.toKg), r: 3.5, fill: COLOR.panel, stroke: COLOR.cyan, 'stroke-width': 1.5 }, g);
+    }
+
+    // 7日平均（なめらかな曲線、太さ3px）。null の切れ目で分ける
+    const runs = []; let run = null;
+    for (let i = 0; i < n; i++) {
+      if (isNum(chart.avg7[i])) { if (!run) runs.push(run = []); run.push([x(i), y(chart.avg7[i])]); }
+      else run = null;
+    }
+    if (runs.length) el('path', { 'data-role': 'avg7', d: smoothPath(runs), pathLength: 1, fill: 'none',
+      stroke: COLOR.cyan, 'stroke-width': 3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+
+    // チェックポイント・着地点（マゼンタ、panel色の縁）
+    const ringed = (role, X, Y, r, color) => {
+      const g = el('g', { 'data-role': role });
+      el('circle', { cx: X, cy: Y, r: r + 2, fill: COLOR.panel }, g);
+      el('circle', { cx: X, cy: Y, r: r, fill: color }, g);
+    };
+    for (const c of chart.checkpoints || []) if (isNum(c.kg)) ringed('checkpoint', x(c.index), y(c.kg), 3, COLOR.magenta);
+    if (goal && isNum(goal.kg)) ringed('goal', x(goal.index), y(goal.kg), 3.5, COLOR.magenta);
+
+    // ラベルの置き場所：隣の線（目標ライン・予測）に重ならないよう、ラベルの幅の範囲で線の高さを見る
+    const yTargetAt = X => {                       // x座標での目標ラインの高さ（なければ null）
+      const fi = Math.max(0, Math.min(n - 1, (X - L) / (R - L) * (n - 1))), i0 = Math.min(n - 2, Math.floor(fi)), a = chart.target[i0], b = chart.target[i0 + 1];
+      return isNum(a) && isNum(b) ? y(a + (b - a) * (fi - i0)) : isNum(a) ? y(a) : null;
+    };
+    const yForecastAt = X => fc && x(fc.toIndex) !== x(fc.fromIndex) ? y(fc.fromKg + (fc.toKg - fc.fromKg) * (X - x(fc.fromIndex)) / (x(fc.toIndex) - x(fc.fromIndex))) : null;
+    const FONT = 12, ASC = 10, GAP = 6;            // ラベルの文字の高さと線との間隔
+    const span = (fn, x0, x1) => [fn(x0), fn((x0 + x1) / 2), fn(x1)].filter(isNum);
+    /** 基準線 base の上（above）または下に置く。線の高さの範囲 ys と重なるときは線の向こう側へずらす */
+    const place = (base, above, ys, asc) => {
+      let yb = above ? base - 12 : base + asc + 10;
+      if (ys.length) {
+        const top = Math.min(...ys), bottom = Math.max(...ys);
+        if (yb + 3 >= top - GAP && yb - asc <= bottom + GAP) yb = above ? top - GAP : bottom + GAP + asc;
+      }
+      return yb;
+    };
+
+    // 今日の点と値のラベル（右上。右端に寄るときは左上）
+    const avgToday = todayI !== null && isNum(chart.avg7[todayI]) ? chart.avg7[todayI] : null;
+    if (avgToday !== null) {
+      const px = x(todayI), py = y(avgToday);
+      ringed('today', px, py, 4, COLOR.cyan);
+      const label = f1(avgToday), w = textW(label, 14), fits = px + 8 + w <= R;
+      const x0 = fits ? px + 8 : px - 8 - w;
+      txt(fits ? px + 8 : px - 8, place(py, true, span(yTargetAt, x0, x0 + w), 11), label,
+        { 'data-role': 'today-label', 'font-size': 14, 'font-weight': 500, fill: COLOR.text, 'text-anchor': fits ? 'start' : 'end' });
+    }
+
+    // 「着地」「予測」のラベル：目標日の左側。上にある点は上に、下にある点は下に
+    if (goal && isNum(goal.kg)) {
+      const gx = x(goal.index), gy = y(goal.kg);
+      const fy = fc ? y(fc.toKg) : null;
+      const goalAbove = fy === null || gy <= fy;
+      const gl = '着地 ' + f1(goal.kg), gw = textW(gl, FONT);
+      txt(gx - 8, place(gy, goalAbove, span(yTargetAt, gx - 8 - gw, gx - 8), ASC), gl, { 'data-role': 'goal-label', 'text-anchor': 'end', fill: COLOR.magenta });
+      if (fc) {
+        const fx = x(fc.toIndex), fl = '予測 ' + f1(fc.toKg), fw = textW(fl, FONT);
+        txt(fx - 8, place(fy, !goalAbove, span(yForecastAt, fx - 8 - fw, fx - 8), ASC), fl, { 'data-role': 'forecast-label', 'text-anchor': 'end', fill: COLOR.cyan });
+      }
+    }
+
+    // 凡例（左上）
+    let lx = L; const ly = 14;
+    const legend = (label, swatch) => {
+      swatch(lx); lx += 20;
+      txt(lx, ly + 4, label, { 'data-role': 'legend-item' });
+      lx += textW(label, 12) + 14;
+    };
+    legend('体重', X => el('circle', { cx: X + 7, cy: ly, r: 2, fill: COLOR.dot }));
+    legend('7日平均', X => el('line', { x1: X, x2: X + 14, y1: ly, y2: ly, stroke: COLOR.cyan, 'stroke-width': 3, 'stroke-linecap': 'round' }));
+    legend('目標ライン', X => el('line', { x1: X + 1, x2: X + 14, y1: ly, y2: ly, stroke: COLOR.magenta, 'stroke-width': 1.5, 'stroke-dasharray': '0 4', 'stroke-linecap': 'round' }));
+    legend('予測', X => el('line', { x1: X, x2: X + 14, y1: ly, y2: ly, stroke: COLOR.cyan, 'stroke-width': 1.5, 'stroke-dasharray': '5 4', opacity: 0.7 }));
+
+    // なぞり操作：縦の補助線と #tooltip
+    const guide = el('line', { 'data-role': 'guide', y1: T, y2: B, stroke: COLOR.faint, 'stroke-width': 1, visibility: 'hidden' });
+    const tip = $('tooltip');
+    const hide = () => { tip.hidden = true; guide.setAttribute('visibility', 'hidden'); };
+    const show = ev => {
+      const rect = svg.getBoundingClientRect();
+      const i = Math.max(0, Math.min(n - 1, Math.round((ev.clientX - rect.left - L) / ((R - L) / Math.max(1, n - 1)))));
+      const X = x(i);
+      guide.setAttribute('x1', X); guide.setAttribute('x2', X); guide.setAttribute('visibility', 'visible');
+      const rows = [['体重', chart.kg[i]], ['7日平均', chart.avg7[i]], ['目標', chart.target[i]]].filter(r => isNum(r[1]));
+      tip.textContent = '';
+      const d = document.createElement('div'); d.className = 'd'; d.textContent = md(chart.dates[i]); tip.appendChild(d);
+      for (const r of rows) { const e = document.createElement('div'); e.textContent = r[0] + ' ' + f1(r[1]); tip.appendChild(e); }
+      tip.hidden = false;
+      const panel = svg.parentNode.getBoundingClientRect();
+      const left = rect.left - panel.left + X, w = tip.offsetWidth;
+      tip.style.left = Math.round(X + 10 + w <= W ? left + 10 : left - 10 - w) + 'px';
+      tip.style.top = Math.round(rect.top - panel.top + T) + 'px';
+    };
+    hide();
+    if (!svg.__wired) {
+      svg.__wired = true;
+      svg.addEventListener('pointermove', ev => svg.__show(ev));
+      svg.addEventListener('pointerdown', ev => svg.__show(ev));
+      svg.addEventListener('pointerleave', () => svg.__hide());
+      svg.addEventListener('pointercancel', () => svg.__hide());
+      // 幅が変わったときだけ描き直す（iPhoneではスクロール中のツールバーの出入りでも resize が起きる）。描き直しでは線を描く動きをしない
+      let timer = null;
+      window.addEventListener('resize', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (Math.round(svg.getBoundingClientRect().width) === svg.__w) return;
+          svg.classList.add('redraw');
+          try { drawChart(svg, svg.__chart); } catch (e) { console.error(e); showError(e && e.message !== undefined ? e.message : String(e)); }
+        }, 150);
+      });
+    }
+    svg.__show = show; svg.__hide = hide; svg.__chart = chart; svg.__w = W;
+
+    // 読み上げ用
+    const parts = [];
+    if (avgToday !== null) parts.push('7日平均' + f1(avgToday) + 'kg');
+    if (todayI !== null && isNum(chart.target[todayI])) parts.push('目標ライン' + f1(chart.target[todayI]) + 'kg');
+    if (fc) parts.push('予測' + f1(fc.toKg) + 'kg');
+    svg.setAttribute('aria-label', parts.length ? parts.join('、') : '降下プロット');
   }
 
   render(MODEL);
