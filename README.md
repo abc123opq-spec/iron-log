@@ -58,3 +58,5 @@
 
 `index.html` の `PRESET_EXERCISES` 配列を編集すれば種目を追加できます。
 カラーは冒頭の `NEON` 定数を変えるとアプリ全体の色が変わります。
+
+体重ダッシュボード → `gas/README.md`
