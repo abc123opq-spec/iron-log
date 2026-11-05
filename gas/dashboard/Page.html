@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<base target="_top">
+<title>体重ダッシュボード</title>
+<style>
+  /* 色（仕様書6.1）。外部のフォント・画像・スクリプトは読み込まない */
+  :root {
+    --page: #000000; --panel: #0A0F1A; --line: #1C2636;
+    --text: #EAF0F7; --sub: #8592A6; --faint: #4E5A6E; --dot: #5B6779;
+    --cyan: #38E1FF; --magenta: #FF4FD8; --green: #3CF29A; --amber: #FFB547;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--page); -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    padding: calc(22px + env(safe-area-inset-top)) calc(14px + env(safe-area-inset-right))
+             calc(40px + env(safe-area-inset-bottom)) calc(14px + env(safe-area-inset-left));
+    background: var(--page);
+    color: var(--text);
+    font-family: -apple-system, "SF Pro Display", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 12px; line-height: 16px;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  [hidden] { display: none !important; }
+  main { max-width: 600px; margin: 0 auto; }
+
+  .sub { color: var(--sub); }
+  .faint { color: var(--faint); }
+  .mag { color: var(--magenta); }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+
+  /* 上部の行 */
+  .top { padding: 0 4px 14px; color: var(--sub); }
+  .top .tminus { color: var(--text); white-space: nowrap; }
+
+  /* パネル */
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; }
+  .panel + .panel { margin-top: 12px; }
+
+  /* ヒーロー */
+  .hero { padding: 22px 22px 20px; }
+  .hero .daydiff { font-size: 13px; white-space: nowrap; }
+  .hero .daydiff[data-tone="up"] .val { color: var(--amber); }
+  .hero .daydiff[data-tone="down"] .val { color: var(--green); }
+  .hero .daydiff[data-tone="flat"] .val { color: var(--sub); }
+  .hero .daydiff .lab { color: var(--faint); font-size: 12px; margin-left: 4px; }
+  .big { margin-top: 6px; font-size: 80px; line-height: 80px; font-weight: 200; letter-spacing: -0.04em; color: var(--text); }
+  .big .unit { font-size: 20px; line-height: 20px; font-weight: 400; letter-spacing: 0; color: var(--sub); margin-left: 8px; }
+  .gauge-head { margin-top: 22px; }
+  .gauge-head .gap { font-size: 13px; white-space: nowrap; }
+  #status[data-tone="ok"] { color: var(--green); }
+  #status[data-tone="caution"] { color: var(--amber); }
+  #gap-text[data-tone="ok"] { color: var(--green); }
+  #gap-text[data-tone="caution"] { color: var(--amber); }
+  #gap-text[data-tone="none"] { color: var(--sub); }
+
+  /* 目標ラインとの差の計器：±1.0kgを全幅、中央＝目標ライン */
+  .gauge { margin-top: 6px; }
+  .gauge-marker-row { position: relative; height: 14px; }
+  #gauge-marker { position: absolute; top: 0; transform: translateX(-50%); color: var(--cyan); font-size: 14px; line-height: 14px; }
+  .gauge-track { position: relative; height: 20px; border-bottom: 1px solid var(--faint); }
+  .gauge-track i { position: absolute; bottom: 0; width: 1px; background: var(--faint); }
+  .gauge-track .t0 { left: 0; height: 8px; }
+  .gauge-track .t1 { left: 25%; height: 6px; }
+  .gauge-track .t2 { left: 50%; height: 20px; background: var(--magenta); }
+  .gauge-track .t3 { left: 75%; height: 6px; }
+  .gauge-track .t4 { right: 0; height: 8px; }
+  .gauge-labels { margin-top: 6px; }
+
+  /* 計器パネル（2×2） */
+  .readouts { display: grid; grid-template-columns: 1fr 1fr; }
+  .cell { padding: 18px 18px 16px; min-width: 0; }
+  .cell:nth-child(odd) { border-right: 1px solid var(--line); }
+  .cell:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
+  .cell .label { color: var(--sub); }
+  .cell .num { margin-top: 8px; font-size: 32px; line-height: 34px; font-weight: 300; letter-spacing: -0.02em; color: var(--text); white-space: nowrap; }
+  .cell .num.cyan { color: var(--cyan); }
+  .cell .num .unit { font-size: 13px; font-weight: 400; letter-spacing: 0; color: var(--sub); margin-left: 4px; }
+  .cell .note { margin-top: 8px; color: var(--faint); }
+  .bar { margin-top: 14px; height: 3px; background: var(--line); }
+  #progress-bar { height: 3px; width: 0; background: var(--cyan); }
+  .cell .note.after-bar { margin-top: 6px; }
+
+  /* グラフ（中身は Task 7 で描く） */
+  .chart-panel { padding: 18px 12px 12px; }
+  #chart { display: block; width: 100%; height: 240px; }
+
+  /* 注意メモ・フッター */
+  .missing { margin: 16px 6px 0; line-height: 18px; color: var(--sub); }
+  .missing .mark { color: var(--amber); }
+  .footer { margin: 26px 6px 0; line-height: 18px; }
+  .footer a { color: var(--sub); text-decoration: underline; }
+
+  /* 記録なし・エラー */
+  .msg { margin: 40px 8px 0; font-size: 15px; line-height: 24px; color: var(--text); }
+  #error h1 { margin: 40px 8px 0; font-size: 20px; line-height: 28px; font-weight: 500; color: var(--amber); }
+  #error p { margin: 14px 8px 0; font-size: 15px; line-height: 24px; color: var(--text); }
+  #error .fix { color: var(--sub); }
+</style>
+</head>
+<body>
+<main>
+  <section id="view-ok" hidden>
+    <div class="row top">
+      <span id="measured"></span>
+      <span class="tminus">着地まで <span class="mag">T−<span id="t-minus"></span></span> 日</span>
+    </div>
+
+    <section class="panel hero">
+      <div class="row">
+        <span class="sub">今日の体重</span>
+        <span id="day-diff" class="daydiff"><span class="val"></span><span class="lab">前日比</span></span>
+      </div>
+      <div class="big"><span id="hero-kg"></span><span class="unit">kg</span></div>
+
+      <div class="row gauge-head">
+        <span class="sub">目標ラインとの差（7日平均）</span>
+        <span class="gap"><span id="gap-text"></span><span id="status-wrap">　<span id="status"></span></span></span>
+      </div>
+      <div class="gauge">
+        <div class="gauge-marker-row"><span id="gauge-marker">◆</span></div>
+        <div class="gauge-track"><i class="t0"></i><i class="t1"></i><i class="t2"></i><i class="t3"></i><i class="t4"></i></div>
+        <div class="row gauge-labels"><span class="faint">軽い −1.0</span><span class="mag">目標ライン</span><span class="faint">+1.0 重い</span></div>
+      </div>
+    </section>
+
+    <section class="panel readouts">
+      <div class="cell">
+        <div class="label">7日平均</div>
+        <div class="num cyan"><span id="avg7"></span><span class="unit">kg</span></div>
+        <div class="note" id="week-diff"></div>
+      </div>
+      <div class="cell">
+        <div class="label"><span id="goal-md"></span> 予測着地</div>
+        <div class="num"><span id="forecast"></span><span class="unit">kg</span></div>
+        <div class="note" id="worse"></div>
+      </div>
+      <div class="cell">
+        <div class="label">必要な週ペース</div>
+        <div class="num"><span id="need"></span><span class="unit">kg/週</span></div>
+        <div class="note" id="need-sub"></div>
+      </div>
+      <div class="cell">
+        <div class="label">進捗</div>
+        <div class="num"><span id="progress"></span><span class="unit">%</span></div>
+        <div class="bar"><div id="progress-bar"></div></div>
+        <div class="note after-bar" id="progress-sub"></div>
+      </div>
+    </section>
+
+    <section class="panel chart-panel">
+      <svg id="chart" role="img" aria-label="降下プロット"></svg>
+    </section>
+
+    <p id="missing-note" class="missing" hidden><span class="mark">●</span>　<span id="missing"></span></p>
+  </section>
+
+  <p id="empty" class="msg" hidden>まだ記録がありません。オムロン コネクトで測ってアプリを閉じると、ここに表示されます。</p>
+
+  <div id="error" hidden>
+    <h1>表示できませんでした</h1>
+    <p id="error-message"></p>
+    <p class="fix">直し方：スプレッドシートの「設定」または「体重ログ」シートを直してから、このページを開き直してください。</p>
+  </div>
+
+  <p class="footer" id="footer" hidden><a id="sheet-link" href="" target="_blank" rel="noopener">スプレッドシートを開く</a></p>
+</main>
+
+<script>
+  const MODEL = <?!= dataJson ?>;
+
+  (function render(m) {
+    const $ = id => document.getElementById(id);
+    const text = (id, v) => { $(id).textContent = v === null || v === undefined ? '' : String(v); };
+
+    if (m.sheetUrl) { $('sheet-link').href = m.sheetUrl; $('footer').hidden = false; }
+
+    if (m.state === 'error') {
+      text('error-message', m.message || '');
+      $('error').hidden = false;
+      return;
+    }
+    if (m.state !== 'ok') { $('empty').hidden = false; return; }
+
+    // 上部の行
+    text('measured', m.header.measured);
+    text('t-minus', m.header.tMinus);
+
+    // ヒーロー
+    const h = m.hero;
+    text('hero-kg', h.kg);
+    const dd = $('day-diff');
+    if (h.dayDiff === null) { dd.hidden = true; dd.removeAttribute('data-tone'); }
+    else { dd.querySelector('.val').textContent = h.dayDiff; dd.dataset.tone = h.dayDiffTone; }
+    const tone = h.status === null ? 'none' : h.status === '順調' ? 'ok' : 'caution';
+    text('gap-text', h.gapText); $('gap-text').dataset.tone = tone;
+    if (h.status === null) { $('status-wrap').hidden = true; $('status').removeAttribute('data-tone'); }
+    else { text('status', h.status); $('status').dataset.tone = tone; }
+    const marker = $('gauge-marker');
+    if (h.gaugePos === null) marker.hidden = true; else marker.style.left = h.gaugePos + '%';
+
+    // 計器パネル
+    const r = m.readouts;
+    const goalDate = m.chart.dates[m.chart.goal.index] || '';
+    text('goal-md', goalDate ? Number(goalDate.slice(5, 7)) + '/' + Number(goalDate.slice(8, 10)) : '目標日');
+    text('avg7', r.avg7); text('week-diff', r.weekDiff);
+    text('forecast', r.forecast); text('worse', r.worse);
+    text('need', r.need); text('need-sub', r.needSub);
+    text('progress', r.progressPct === null ? '—' : r.progressPct);
+    $('progress-bar').style.width = (r.progressPct === null ? 0 : r.progressPct) + '%';
+    text('progress-sub', r.progressSub);
+
+    // 注意メモ
+    if (m.missingNote !== null) { text('missing', m.missingNote); $('missing-note').hidden = false; }
+
+    $('view-ok').hidden = false;
+  })(MODEL);
+</script>
+</body>
+</html>

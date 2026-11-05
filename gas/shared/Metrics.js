@@ -505,6 +505,98 @@ function formatSummary(r) {
   return parts.join(SUMMARY_SEP);
 }
 
+// ---- 計器盤ページの表示用モデル（仕様書6.1） --------------------------------
+
+var NO_VALUE = '—';          // — (U+2014 EM DASH)：値がない項目
+var WIDE_SPACE = '　';        // 　 (U+3000 IDEOGRAPHIC SPACE)
+var GAUGE_FULL_SCALE_KG = 1.0;
+
+/** JSON文字列。`<` を < にして <script> の中に埋め込めるようにする */
+function safeJson(obj) {
+  return JSON.stringify(obj).replace(/</g, '\\u003c');
+}
+
+/** 目標ラインとの差の計器の位置（%）。±1.0kgを全幅、2〜98に収める */
+function gaugePos(gap) {
+  if (gap === null) return null;
+  return Math.round(Math.min(98, Math.max(2, 50 + gap / GAUGE_FULL_SCALE_KG * 50)));
+}
+
+function dayDiffTone(x) {
+  if (x === null) return null;
+  var a = roundAbs(x, 1);
+  return a === 0 ? 'flat' : x < 0 ? 'down' : 'up';
+}
+
+/**
+ * Report（computeReport の返り値）と設定から、ページに埋め込む PageModel を作る。
+ * 記録がなければ { state: 'empty', sheetUrl }。エラーのモデル { state: 'error', message } は doGet 側で作る。
+ */
+function buildPageModel(r, settings, sheetUrl) {
+  if (r.latest === null) return { state: 'empty', sheetUrl: sheetUrl };
+  var latest = r.latest;
+  var goalKg = settings.goalKg;
+
+  var measured = md(latest.date) + ' ' + weekdayJa(latest.date) + (latest.time ? WIDE_SPACE + latest.time : '') + ' 計測';
+
+  var hero = {
+    kg: fmt1(latest.kg),
+    dayDiff: r.dayDiff === null ? null : fmtDayDiff(r.dayDiff),
+    dayDiffTone: dayDiffTone(r.dayDiff),
+    gapText: r.gap === null ? NO_VALUE : fmtSigned(r.gap, 1) + 'kg',
+    status: r.status,
+    gaugePos: gaugePos(r.gap)
+  };
+
+  var readouts = {
+    avg7: r.avg7 === null ? NO_VALUE : fmt1(r.avg7),
+    weekDiff: '前週差 ' + (r.weekDiff === null ? NO_VALUE : fmtSigned(r.weekDiff, 1) + 'kg'),
+    forecast: r.forecast === null ? NO_VALUE : fmt1(r.forecast),
+    worse: '遅い方のペース ' + (r.worsePace === null ? NO_VALUE : fmtSigned(r.worsePace, 2) + '/週'),
+    need: r.needPace === null ? NO_VALUE : fmtSigned(r.needPace, 2),
+    needSub: r.avg7 !== null && r.daysLeft > 0
+      ? '残り' + r.daysLeft + '日で ' + fmt1(r.avg7 - goalKg) + 'kg'
+      : '残り' + r.daysLeft + '日',
+    progressPct: r.progress === null ? null : Math.round(r.progress * 100),
+    progressSub: (r.startTarget === null ? NO_VALUE : fmt1(r.startTarget)) + ' → ' + fmt1(goalKg)
+  };
+
+  var missingNote = r.missing.length === 0 ? null
+    : r.missing.map(md).join('・') + 'は未測定。7日平均は測った日だけで計算しています。';
+
+  var dates = [], kg = [], a7 = [], target = [];
+  for (var i = 0; i < r.series.length; i++) {
+    var s = r.series[i];
+    dates.push(s.date); kg.push(s.kg); a7.push(s.avg7); target.push(s.target);
+  }
+  var todayIndex = dates.indexOf(r.today);
+  if (todayIndex < 0) todayIndex = null;
+  var checkpoints = [];
+  var cps = settings.checkpoints || [];
+  for (var j = 0; j < cps.length; j++) {
+    var idx = dates.indexOf(cps[j].date);
+    if (idx >= 0) checkpoints.push({ index: idx, kg: cps[j].kg });
+  }
+  var chart = {
+    dates: dates, kg: kg, avg7: a7, target: target,
+    todayIndex: todayIndex,
+    checkpoints: checkpoints,
+    goal: { index: dates.length - 1, kg: goalKg },
+    forecast: r.forecastLine === null ? null
+      : { fromIndex: todayIndex, fromKg: r.forecastLine.fromKg, toIndex: dates.length - 1, toKg: r.forecastLine.toKg }
+  };
+
+  return {
+    state: 'ok',
+    sheetUrl: sheetUrl,
+    header: { measured: measured, tMinus: r.daysLeft },
+    hero: hero,
+    readouts: readouts,
+    missingNote: missingNote,
+    chart: chart
+  };
+}
+
 if (typeof module !== 'undefined') module.exports = {
   toYmd: toYmd,
   toHm: toHm,
@@ -523,5 +615,7 @@ if (typeof module !== 'undefined') module.exports = {
   fmtDayDiff: fmtDayDiff,
   md: md,
   weekdayJa: weekdayJa,
-  formatSummary: formatSummary
+  formatSummary: formatSummary,
+  safeJson: safeJson,
+  buildPageModel: buildPageModel
 };
