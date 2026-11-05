@@ -82,3 +82,40 @@ run('動きを減らす設定では線を描く動きをしない', async () => 
   assert.equal(await page.$eval('#chart [data-role="avg7"]', el => getComputedStyle(el).animationName), 'none');
   await browser.close();
 });
+run('目標ラインは全部のチェックポイントを通る', async () => {
+  const s2 = { ...SETTINGS, checkpoints: [{ date: '2026-11-01', kg: 71.8 }, { date: '2026-11-15', kg: 70.6 }] };   // 架空
+  const { browser, page } = await openPage(M.buildPageModel(M.computeReport(LOG, s2, '2026-11-04'), s2, ''));
+  try {
+    assert.equal(await page.locator('#chart [data-role="checkpoint"]').count(), 2);
+    assert.notEqual(await page.getAttribute('#chart [data-role="target"]', 'stroke-dasharray'), null);
+    const r = await page.evaluate(() => {
+      const d = document.querySelector('#chart [data-role="target"]').getAttribute('d');
+      const vertices = d.match(/-?[\d.]+,-?[\d.]+/g).map(s => s.split(',').map(Number));
+      return [...document.querySelectorAll('#chart [data-role="checkpoint"] circle')].map(c => {
+        const cx = Number(c.getAttribute('cx')), cy = Number(c.getAttribute('cy'));
+        return vertices.some(([vx, vy]) => Math.abs(vx - cx) < 0.01 && Math.abs(vy - cy) < 0.01);   // 中心が目標ラインの頂点になっている
+      });
+    });
+    assert.deepEqual(r, [true, true, true, true]);
+    await settled(page); await shot(page, 'checkpoints');
+  } finally { await browser.close(); }
+});
+run('目標日の近くでもラベルが重ならない', async () => {
+  // 架空のデータ：11/5〜11/30 もゆっくり減り続ける（今日＝11/30、残り5日）
+  const late = LOG.concat(Array.from({ length: 26 }, (_, k) => ({
+    date: new Date(Date.UTC(2026, 10, 5 + k)).toISOString().slice(0, 10), kg: Math.round((71.6 - 0.05 * (k + 1)) * 10) / 10, time: '07:10', received: '' })));
+  const { browser, page, errors } = await openPage(M.buildPageModel(M.computeReport(late, SETTINGS, '2026-11-30'), SETTINGS, ''));
+  try {
+    const roles = ['today-label', 'goal-label', 'forecast-label'];
+    const boxes = {}; for (const r of roles) boxes[r] = await page.locator(`#chart [data-role="${r}"]`).boundingBox();
+    const svg = await page.locator('#chart').boundingBox();
+    const hit = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+    for (const r of roles) {
+      const b = boxes[r];
+      assert.ok(b && b.x >= svg.x && b.y >= svg.y && b.x + b.width <= svg.x + svg.width && b.y + b.height <= svg.y + svg.height, r + ' はグラフの中');
+      for (const s of roles) if (s !== r) assert.equal(hit(b, boxes[s]), false, r + ' と ' + s + ' が重なっている');
+    }
+    assert.deepEqual(errors, []);
+    await settled(page); await shot(page, 'near-goal');
+  } finally { await browser.close(); }
+});

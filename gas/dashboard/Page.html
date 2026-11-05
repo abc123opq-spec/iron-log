@@ -324,11 +324,14 @@
     const xi = [0, Math.round((n - 1) / 3), Math.round(2 * (n - 1) / 3), n - 1].filter((v, k, a) => a.indexOf(v) === k);
     for (const i of xi) txt(x(i), B + 22, md(chart.dates[i]), { 'data-role': 'x-tick', 'text-anchor': i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle' });
 
-    // 目標ライン（マゼンタの丸い点の点線）
-    let t0 = -1, t1 = -1;
-    for (let i = 0; i < n; i++) if (isNum(chart.target[i])) { if (t0 < 0) t0 = i; t1 = i; }
-    if (t0 >= 0) el('line', { 'data-role': 'target', x1: x(t0), y1: y(chart.target[t0]), x2: x(t1), y2: y(chart.target[t1]),
-      stroke: COLOR.magenta, 'stroke-width': 1.5, 'stroke-dasharray': '0 4', 'stroke-linecap': 'round' });
+    // 目標ライン（マゼンタの丸い点の点線）：日ごとの値を全部通る折れ線（チェックポイントで折れる）。null の切れ目で分ける
+    let td = '', tprev = false;
+    for (let i = 0; i < n; i++) {
+      if (isNum(chart.target[i])) { td += (tprev ? ' L' : (td ? ' M' : 'M')) + x(i) + ',' + y(chart.target[i]); tprev = true; }
+      else tprev = false;
+    }
+    if (td) el('path', { 'data-role': 'target', d: td, fill: 'none',
+      stroke: COLOR.magenta, 'stroke-width': 1.5, 'stroke-dasharray': '0 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
 
     // 日々の体重（直径4px）
     for (let i = 0; i < n; i++) if (isNum(chart.kg[i])) el('circle', { 'data-role': 'weight-dot', cx: x(i), cy: y(chart.kg[i]), r: 2, fill: COLOR.dot });
@@ -365,39 +368,60 @@
       return isNum(a) && isNum(b) ? y(a + (b - a) * (fi - i0)) : isNum(a) ? y(a) : null;
     };
     const yForecastAt = X => fc && x(fc.toIndex) !== x(fc.fromIndex) ? y(fc.fromKg + (fc.toKg - fc.fromKg) * (X - x(fc.fromIndex)) / (x(fc.toIndex) - x(fc.fromIndex))) : null;
-    const FONT = 12, ASC = 10, GAP = 6;            // ラベルの文字の高さと線との間隔
+    const FONT = 12, GAP = 6;                      // ラベルの文字の大きさと線との間隔。文字の箱は基線の上 1.0em・下 0.3em とみなす
+    const asc = size => size, desc = size => size * 0.3;
     const span = (fn, x0, x1) => [fn(x0), fn((x0 + x1) / 2), fn(x1)].filter(isNum);
     /** 基準線 base の上（above）または下に置く。線の高さの範囲 ys と重なるときは線の向こう側へずらす */
-    const place = (base, above, ys, asc) => {
-      let yb = above ? base - 12 : base + asc + 10;
+    const place = (base, above, ys, size) => {
+      let yb = above ? base - 12 : base + asc(size) + 10;
       if (ys.length) {
         const top = Math.min(...ys), bottom = Math.max(...ys);
-        if (yb + 3 >= top - GAP && yb - asc <= bottom + GAP) yb = above ? top - GAP : bottom + GAP + asc;
+        if (yb + desc(size) >= top - GAP && yb - asc(size) <= bottom + GAP) yb = above ? top - GAP - desc(size) : bottom + GAP + asc(size);
       }
       return yb;
     };
+    // ラベルどうしも重ねない：先に置いたラベルの箱と重なるあいだ、上（または下）へ積む。上端に当たれば下へ回す
+    const boxes = [];                               // { x0, x1, yb, size }：文字の箱は x0〜x1、yb−asc〜yb+desc
+    const overlaps = (a, b) => a.x0 < b.x1 + 4 && b.x0 < a.x1 + 4 && a.yb - asc(a.size) < b.yb + desc(b.size) + 3 && b.yb - asc(b.size) < a.yb + desc(a.size) + 3;
+    const settle = (box, above, base) => {
+      let flipped = false;
+      for (let k = 0; k < 12; k++) {
+        const hit = boxes.find(b => overlaps(box, b));
+        if (!hit) break;
+        if (above) {
+          box.yb = hit.yb - asc(hit.size) - 4 - desc(box.size);
+          if (box.yb - asc(box.size) < 28 && !flipped) { above = false; flipped = true; box.yb = base + asc(box.size) + 10; }   // 凡例の下まで来たら下へ
+        } else box.yb = hit.yb + desc(hit.size) + 4 + asc(box.size);
+      }
+      box.yb = Math.min(box.yb, CH - desc(box.size));
+      boxes.push(box);
+      return box.yb;
+    };
 
-    // 今日の点と値のラベル（右上。右端に寄るときは左上）
+    // 今日の点と値のラベル（右上。右端に寄るときは左上）。いちばん大事なので先に置く
     const avgToday = todayI !== null && isNum(chart.avg7[todayI]) ? chart.avg7[todayI] : null;
     if (avgToday !== null) {
       const px = x(todayI), py = y(avgToday);
       ringed('today', px, py, 4, COLOR.cyan);
       const label = f1(avgToday), w = textW(label, 14), fits = px + 8 + w <= R;
       const x0 = fits ? px + 8 : px - 8 - w;
-      txt(fits ? px + 8 : px - 8, place(py, true, span(yTargetAt, x0, x0 + w), 11), label,
+      const yb = settle({ x0: x0, x1: x0 + w, yb: place(py, true, span(yTargetAt, x0, x0 + w), 14), size: 14 }, true, py);
+      txt(fits ? px + 8 : px - 8, yb, label,
         { 'data-role': 'today-label', 'font-size': 14, 'font-weight': 500, fill: COLOR.text, 'text-anchor': fits ? 'start' : 'end' });
     }
 
-    // 「着地」「予測」のラベル：目標日の左側。上にある点は上に、下にある点は下に
+    // 「着地」「予測」のラベル：目標日の左側。上にある点は上に、下にある点は下に。今日のラベルや互いと重なれば積む
     if (goal && isNum(goal.kg)) {
       const gx = x(goal.index), gy = y(goal.kg);
       const fy = fc ? y(fc.toKg) : null;
       const goalAbove = fy === null || gy <= fy;
       const gl = '着地 ' + f1(goal.kg), gw = textW(gl, FONT);
-      txt(gx - 8, place(gy, goalAbove, span(yTargetAt, gx - 8 - gw, gx - 8), ASC), gl, { 'data-role': 'goal-label', 'text-anchor': 'end', fill: COLOR.magenta });
+      const gyb = settle({ x0: gx - 8 - gw, x1: gx - 8, yb: place(gy, goalAbove, span(yTargetAt, gx - 8 - gw, gx - 8), FONT), size: FONT }, goalAbove, gy);
+      txt(gx - 8, gyb, gl, { 'data-role': 'goal-label', 'text-anchor': 'end', fill: COLOR.magenta });
       if (fc) {
         const fx = x(fc.toIndex), fl = '予測 ' + f1(fc.toKg), fw = textW(fl, FONT);
-        txt(fx - 8, place(fy, !goalAbove, span(yForecastAt, fx - 8 - fw, fx - 8), ASC), fl, { 'data-role': 'forecast-label', 'text-anchor': 'end', fill: COLOR.cyan });
+        const fyb = settle({ x0: fx - 8 - fw, x1: fx - 8, yb: place(fy, !goalAbove, span(yForecastAt, fx - 8 - fw, fx - 8), FONT), size: FONT }, !goalAbove, fy);
+        txt(fx - 8, fyb, fl, { 'data-role': 'forecast-label', 'text-anchor': 'end', fill: COLOR.cyan });
       }
     }
 
