@@ -443,6 +443,68 @@ function computeReport(log, settings, today) {
   };
 }
 
+// ---- 表示の書式（仕様書5章の丸め・6.2の要約） ---------------------------------
+
+var SIGN_PLUS = '+';
+var SIGN_MINUS = '−';   // − (U+2212 MINUS SIGN)
+var SIGN_ZERO = '±';    // ±
+var WEEKDAY_JA = '日月火水木金土';
+var SUMMARY_SEP = '｜';  // ｜ (U+FF5C FULLWIDTH VERTICAL LINE)
+
+/** |x| を小数 digits 桁に丸める（半分は0から遠いほうへ） */
+function roundAbs(x, digits) {
+  var p = Math.pow(10, digits);
+  return Math.round(Math.abs(x) * p) / p;
+}
+
+/** 小数1桁。負は −（U+2212）、−0.0 は出さない */
+function fmt1(x) {
+  var a = roundAbs(x, 1);
+  return (a === 0 || x >= 0 ? '' : SIGN_MINUS) + a.toFixed(1);
+}
+
+/** 符号つき（+ / − / ±）で小数 digits 桁。符号は丸めたあとの値で決める */
+function fmtSigned(x, digits) {
+  var a = roundAbs(x, digits);
+  var sign = a === 0 ? SIGN_ZERO : x < 0 ? SIGN_MINUS : SIGN_PLUS;
+  return sign + a.toFixed(digits);
+}
+
+/** 前日比：▲増 / ▼減 / ±0.0（小数1桁） */
+function fmtDayDiff(x) {
+  var a = roundAbs(x, 1);
+  var mark = a === 0 ? SIGN_ZERO : x < 0 ? '▼' : '▲';
+  return mark + a.toFixed(1);
+}
+
+/** yyyy-MM-dd → M/d（0詰めなし） */
+function md(ymd) {
+  var d = new Date(ymdToUtc(ymd));
+  return (d.getUTCMonth() + 1) + '/' + d.getUTCDate();
+}
+
+/** yyyy-MM-dd → 曜日1文字（日月火水木金土）。暦の日付から求め、実行環境の時差に依らない */
+function weekdayJa(ymd) {
+  return WEEKDAY_JA.charAt(new Date(ymdToUtc(ymd)).getUTCDay());
+}
+
+/**
+ * 通知の要約（仕様書6.2）。Report（computeReport の返り値）から1行を作る。
+ * 1つ目：[測定日 ]体重kg[ 前日比]（測定日は今日でないときだけ）
+ * 2つ目：目標ライン 差 状態（差がnullなら省く）
+ * 3つ目：予測 値（T−残り日数）（予測がnullなら省く）
+ */
+function formatSummary(r) {
+  if (r.latest === null) return 'まだ記録がありません';
+  var parts = [];
+  var first = (r.isToday ? '' : md(r.latest.date) + ' ') + fmt1(r.latest.kg) + 'kg';
+  if (r.dayDiff !== null) first += ' ' + fmtDayDiff(r.dayDiff);
+  parts.push(first);
+  if (r.gap !== null) parts.push('目標ライン ' + fmtSigned(r.gap, 1) + ' ' + r.status);
+  if (r.forecast !== null) parts.push('予測 ' + fmt1(r.forecast) + '（T' + SIGN_MINUS + r.daysLeft + '）');
+  return parts.join(SUMMARY_SEP);
+}
+
 if (typeof module !== 'undefined') module.exports = {
   toYmd: toYmd,
   toHm: toHm,
@@ -455,5 +517,11 @@ if (typeof module !== 'undefined') module.exports = {
   mergeDaily: mergeDaily,
   avg7: avg7,
   targetAt: targetAt,
-  computeReport: computeReport
+  computeReport: computeReport,
+  fmt1: fmt1,
+  fmtSigned: fmtSigned,
+  fmtDayDiff: fmtDayDiff,
+  md: md,
+  weekdayJa: weekdayJa,
+  formatSummary: formatSummary
 };
