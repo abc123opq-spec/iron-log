@@ -272,6 +272,177 @@ function mergeDaily(log, rows, received) {
   return { log: out, changed: changed };
 }
 
+// ---- 指標の計算（仕様書5章） -------------------------------------------------
+
+var AVG7_MIN_DAYS = 4;
+
+/** log（日付順・1日1件）を { 日付: 体重 } にする */
+function kgByDate(log) {
+  var map = {};
+  for (var i = 0; i < log.length; i++) map[log[i].date] = log[i].kg;
+  return map;
+}
+
+/**
+ * 7日平均 A7(date)：date−6〜date の7日間に測った値の平均。
+ * 測った日が4日未満なら null。
+ */
+function avg7(log, date) {
+  var map = kgByDate(log);
+  return avg7From(map, date);
+}
+
+function avg7From(map, date) {
+  var sum = 0, n = 0;
+  for (var k = -6; k <= 0; k++) {
+    var kg = map[addDays(date, k)];
+    if (kg === undefined) continue;
+    sum += kg;
+    n++;
+  }
+  return n < AVG7_MIN_DAYS ? null : sum / n;
+}
+
+/**
+ * 目標ラインの折れ点：チェックポイント（日付順）＋(目標日, 目標体重)。
+ * チェックポイントが0件なら、開始日以降で最初に測った値を最初の点にする。
+ * 最初の点が作れなければ null。
+ */
+function targetPoints(settings, log) {
+  var points = [];
+  var cps = settings.checkpoints || [];
+  if (cps.length > 0) {
+    for (var i = 0; i < cps.length; i++) points.push({ date: cps[i].date, kg: cps[i].kg });
+  } else {
+    var first = null;
+    for (var j = 0; j < log.length; j++) {
+      if (log[j].date >= settings.startDate) { first = log[j]; break; }
+    }
+    if (first === null) return null;
+    points.push({ date: first.date, kg: first.kg });
+  }
+  points.push({ date: settings.goalDate, kg: settings.goalKg });
+  return points;
+}
+
+/** 2点を結ぶ直線上の date の値（同じ日付の2点なら後の点の値） */
+function lineAt(p, q, date) {
+  var span = daysBetween(p.date, q.date);
+  if (span === 0) return q.kg;
+  return p.kg + (q.kg - p.kg) * daysBetween(p.date, date) / span;
+}
+
+/**
+ * 目標ライン T(date)。折れ点を順に直線で結ぶ。
+ * 最初の点より前は最初の区間の傾きで延ばし、目標日以降は目標体重。
+ * 最初の点が作れなければ null。
+ */
+function targetAt(settings, log, date) {
+  var points = targetPoints(settings, log);
+  if (points === null) return null;
+  return targetAtPoints(points, settings, date);
+}
+
+function targetAtPoints(points, settings, date) {
+  if (date >= settings.goalDate) return settings.goalKg;
+  if (date < points[0].date) return lineAt(points[0], points[1], date);
+  for (var i = 0; i < points.length - 1; i++) {
+    if (date >= points[i].date && date < points[i + 1].date) return lineAt(points[i], points[i + 1], date);
+  }
+  return settings.goalKg;
+}
+
+function clamp01(x) {
+  return x < 0 ? 0 : x > 1 ? 1 : x;
+}
+
+/**
+ * ダッシュボードの指標をまとめて計算する。
+ * log は日付順・1日1件。today は yyyy-MM-dd（日本時間）。
+ * 返り値の形は Report（実装計画 Task 3）。
+ */
+function computeReport(log, settings, today) {
+  var map = kgByDate(log);
+  var goalDate = settings.goalDate, goalKg = settings.goalKg, startDate = settings.startDate;
+  var daysLeft = daysBetween(today, goalDate);
+
+  // 今日の体重（なければ直近）と前日比
+  var latestIdx = -1;
+  for (var i = 0; i < log.length; i++) if (log[i].date <= today) latestIdx = i;
+  var latest = latestIdx < 0 ? null : log[latestIdx];
+  var isToday = latest !== null && latest.date === today;
+  var dayDiff = latestIdx > 0 ? latest.kg - log[latestIdx - 1].kg : null;
+
+  // 7日平均・前週差
+  var a7 = avg7From(map, today);
+  var a7prev = avg7From(map, addDays(today, -7));
+  var weekDiff = a7 === null || a7prev === null ? null : a7 - a7prev;
+
+  // 目標ライン
+  var points = targetPoints(settings, log);
+  var tAt = function (date) { return points === null ? null : targetAtPoints(points, settings, date); };
+  var target = tAt(today);
+  var gap = a7 === null || target === null ? null : a7 - target;
+  var status = gap === null ? null : gap <= 0 ? '順調' : '要注意';
+
+  // ペース
+  var pace1 = weekDiff;
+  var pace4 = null;
+  if (a7 !== null) {
+    var from = addDays(today, -28);
+    if (from < startDate) from = startDate;
+    for (var d = from; d < today; d = addDays(d, 1)) {
+      var base = avg7From(map, d);
+      if (base !== null) {
+        pace4 = (a7 - base) / (daysBetween(d, today) / 7);
+        break;
+      }
+    }
+  }
+  var worsePace = pace1 === null ? pace4 : pace4 === null ? pace1 : Math.max(pace1, pace4);
+
+  // 予測・必要ペース
+  var forecast = daysLeft > 0 && a7 !== null && worsePace !== null ? a7 + worsePace * (daysLeft / 7) : null;
+  var needPace = daysLeft > 0 && a7 !== null ? -(a7 - goalKg) / (daysLeft / 7) : null;
+
+  // 進捗
+  var startTarget = tAt(startDate);
+  var progress = null;
+  if (a7 !== null && startTarget !== null && startTarget - goalKg !== 0) {
+    progress = clamp01((startTarget - a7) / (startTarget - goalKg));
+  }
+
+  // 未測定の日（開始日と最初の記録のどちらか遅い方から）
+  var missing = [];
+  if (log.length > 0) {
+    var floor = log[0].date > startDate ? log[0].date : startDate;
+    for (var k = -6; k <= 0; k++) {
+      var md = addDays(today, k);
+      if (md >= floor && map[md] === undefined) missing.push(md);
+    }
+  }
+
+  // グラフ用の系列（開始日〜目標日）
+  var series = [];
+  for (var sd = startDate; sd <= goalDate; sd = addDays(sd, 1)) {
+    series.push({
+      date: sd,
+      kg: map[sd] === undefined ? null : map[sd],
+      avg7: sd <= today ? avg7From(map, sd) : null,
+      target: tAt(sd)
+    });
+  }
+  var forecastLine = forecast === null ? null : { fromDate: today, fromKg: a7, toDate: goalDate, toKg: forecast };
+
+  return {
+    today: today, daysLeft: daysLeft, latest: latest, isToday: isToday, dayDiff: dayDiff,
+    avg7: a7, weekDiff: weekDiff, target: target, gap: gap, status: status,
+    pace1: pace1, pace4: pace4, worsePace: worsePace,
+    forecast: forecast, needPace: needPace, progress: progress, startTarget: startTarget,
+    missing: missing, series: series, forecastLine: forecastLine
+  };
+}
+
 if (typeof module !== 'undefined') module.exports = {
   toYmd: toYmd,
   toHm: toHm,
@@ -281,5 +452,8 @@ if (typeof module !== 'undefined') module.exports = {
   parseLogValues: parseLogValues,
   parseSettingsValues: parseSettingsValues,
   parseSamples: parseSamples,
-  mergeDaily: mergeDaily
+  mergeDaily: mergeDaily,
+  avg7: avg7,
+  targetAt: targetAt,
+  computeReport: computeReport
 };
