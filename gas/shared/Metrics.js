@@ -203,18 +203,38 @@ function isValidYmd(y, mo, d) {
  * 前に空白・NBSP・細い空白があってもよい）は無視する。kg 以外の単位は読まない。読めなければ null。
  * 返り値: { at: Date, kg: number }
  */
+// ISO 8601（例 2026-11-06T07:35:12+09:00）。時差がなければ日本時間
+var SAMPLE_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:\d{2})?\s*,\s*(\d+(?:\.\d+)?)[\s  ]*(?:[kK][gG])?$/;
+// iPhoneが日付を既定の書き方で送ったとき（例 2026/11/06 7:35、2026/11/06 午前7:35）。日本時間として読む
+var SAMPLE_LOCAL_RE = /^(\d{4})\/(\d{1,2})\/(\d{1,2})\s+(午前|午後)?(\d{1,2}):(\d{2})(?::(\d{2}))?\s*,\s*(\d+(?:\.\d+)?)[\s  ]*(?:[kK][gG])?$/;
+
 function parseSampleLine(line) {
-  var m = line.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:\d{2})?\s*,\s*(\d+(?:\.\d+)?)[\s  ]*(?:[kK][gG])?$/);
-  if (!m) return null;
-  var y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
-  var h = Number(m[4]), mi = Number(m[5]), s = m[6] === undefined ? 0 : Number(m[6]);
+  var m, y, mo, d, h, mi, s, offset, kgText;
+  if ((m = line.match(SAMPLE_ISO_RE))) {
+    y = Number(m[1]); mo = Number(m[2]); d = Number(m[3]);
+    h = Number(m[4]); mi = Number(m[5]); s = m[6] === undefined ? 0 : Number(m[6]);
+    offset = m[7] === undefined ? '+09:00' : m[7];
+    kgText = m[8];
+  } else if ((m = line.match(SAMPLE_LOCAL_RE))) {
+    y = Number(m[1]); mo = Number(m[2]); d = Number(m[3]);
+    h = Number(m[5]); mi = Number(m[6]); s = m[7] === undefined ? 0 : Number(m[7]);
+    offset = '+09:00';
+    kgText = m[8];
+    if (m[4] !== undefined) {
+      // 12時間表示：午前12時＝0時、午後12時＝12時、午後1〜11時＝13〜23時
+      if (h < 1 || h > 12) return null;
+      h = (h % 12) + (m[4] === '午後' ? 12 : 0);
+    }
+  } else {
+    return null;
+  }
   if (!isValidYmd(y, mo, d) || h > 23 || mi > 59 || s > 59) return null;
-  var offset = m[7] === undefined ? '+09:00' : m[7];
-  var at = new Date(m[1] + '-' + m[2] + '-' + m[3] + 'T' + m[4] + ':' + m[5] + ':' + pad2(s) + offset);
+  var at = new Date(String(y) + '-' + pad2(mo) + '-' + pad2(d) + 'T' + pad2(h) + ':' + pad2(mi) + ':' + pad2(s) + offset);
   if (!isValidDate(at)) return null;
-  var kg = toNumber(m[8]);
+  var kg = toNumber(kgText);
   if (!isFinite(kg)) return null;
-  return { at: at, kg: kg };
+  // ヘルスケアの値は 93.80000305175781 のような端数つきで届くので、小数2桁に丸める
+  return { at: at, kg: Math.round(kg * 100) / 100 };
 }
 
 /**
