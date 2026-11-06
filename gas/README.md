@@ -433,7 +433,9 @@ iPhoneから送られてきた体重を受け取って、「体重ログ」に�
 
 ### URLを開くと「スクリプト関数が見つかりません: doGet」と出る
 
-公開した版に `Code` の中身が入っていません。
+まず、控えたURLの形を見ます。`https://script.google.com/macros/library/d/…` のように **`/macros/library/`** が入っていたら、種類を「ライブラリ」で公開しています。「デプロイ」→「新しいデプロイ」→ 歯車「種類の選択」→「**ウェブアプリ**」で公開し直し、`https://script.google.com/macros/s/…/exec` の形のURLを使ってください（実行するユーザーとアクセスできるユーザーは、2.4・3.3のとおり）。
+
+URLが `/macros/s/…/exec` の形なのにこのエラーが出るときは、公開した版に `Code` の中身が入っていません。
 
 1. エディタで `Code.gs` を開き、中身が `gas/dashboard/Code.js`（受け取り口なら `gas/ingest/Code.js`）になっているか確かめます。最初の `function myFunction() {}` のままなら、全部消して貼り直します。別のファイル（`Metrics` や `Page`）に貼っていないかも見ます。
 2. 保存します。コードの上の関数名の一覧に `doGet` が出れば、正しく入っています。
